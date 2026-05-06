@@ -73,6 +73,95 @@ enum IndexTarget {
 }
 
 // ---------------------------------------------------------------------------
+// Newtypes
+// ---------------------------------------------------------------------------
+
+/// Identifier of a doc node in the cross-reference graph.
+///
+/// Distinct type from [`Kind`] so the compiler rejects accidental swaps in
+/// function arguments and map keys. Wraps a `String` for cheap construction
+/// from front-matter input; serializes transparently.
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Ord, PartialOrd, Deserialize, serde::Serialize)]
+#[serde(transparent)]
+struct DocId(String);
+
+impl DocId {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for DocId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for DocId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for DocId {
+    fn from(s: &str) -> Self {
+        Self(s.to_owned())
+    }
+}
+
+impl std::borrow::Borrow<str> for DocId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Identifier of a doc kind (the `kind:` field in front matter).
+///
+/// Distinct type from [`DocId`] so a function expecting a kind cannot be
+/// passed a doc id by mistake. The reserved value `"index"` denotes a
+/// generated INDEX doc; see [`Kind::is_index`].
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Ord, PartialOrd, Deserialize, serde::Serialize)]
+#[serde(transparent)]
+struct Kind(String);
+
+impl Kind {
+    const INDEX_LITERAL: &'static str = "index";
+
+    #[allow(dead_code)] // symmetry with DocId::as_str; reserved for future use.
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn is_index(&self) -> bool {
+        self.0 == Self::INDEX_LITERAL
+    }
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for Kind {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for Kind {
+    fn from(s: &str) -> Self {
+        Self(s.to_owned())
+    }
+}
+
+impl std::borrow::Borrow<str> for Kind {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Kind manifest (loaded from ${KSSNI_DOC_ROOT}/kinds.md)
 // ---------------------------------------------------------------------------
 
@@ -93,7 +182,7 @@ enum DeclaredVia {
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)] // id_pattern + singleton are documented in kinds.md, surfaced via the manifest model for future use.
 struct KindDef {
-    name: String,
+    name: Kind,
     #[serde(default)]
     path_globs: Vec<String>,
     /// `provides` or `generated`; absent means a normal file-backed kind.
@@ -115,7 +204,7 @@ struct KindIndex {
 }
 
 struct Manifest {
-    kinds: BTreeMap<String, KindDef>,
+    kinds: BTreeMap<Kind, KindDef>,
 }
 
 impl Manifest {
@@ -144,7 +233,7 @@ impl Manifest {
         Ok(Self { kinds })
     }
 
-    fn knows(&self, kind: &str) -> bool {
+    fn knows(&self, kind: &Kind) -> bool {
         self.kinds.contains_key(kind)
     }
 }
@@ -181,51 +270,53 @@ struct FrontMatter {
 
 #[derive(Debug, Deserialize)]
 struct RefsBlock {
-    id: String,
-    kind: String,
+    id: DocId,
+    kind: Kind,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
     spec: Option<String>,
     #[serde(default)]
-    provides: Vec<String>,
+    provides: Vec<DocId>,
     #[serde(default)]
-    implements: Vec<String>,
+    implements: Vec<DocId>,
     #[serde(default)]
-    depends_on: Vec<String>,
+    depends_on: Vec<DocId>,
     #[serde(default)]
-    related: Vec<String>,
+    related: Vec<DocId>,
     #[serde(default)]
     modules: Vec<String>,
     #[serde(default)]
     generated: bool,
     /// For `kind: index` — name of the kind being indexed.
     #[serde(default)]
-    indexes_kind: Option<String>,
+    indexes_kind: Option<Kind>,
 }
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // indexes_kind is round-tripped from generated INDEX frontmatter; reserved for future use.
 struct Doc {
-    id: String,
-    kind: String,
+    id: DocId,
+    kind: Kind,
     title: Option<String>,
     spec: Option<String>,
     rel_path: PathBuf,
-    provides: Vec<String>,
-    implements: Vec<String>,
-    depends_on: Vec<String>,
-    related: Vec<String>,
+    provides: Vec<DocId>,
+    implements: Vec<DocId>,
+    depends_on: Vec<DocId>,
+    related: Vec<DocId>,
     modules: Vec<String>,
     generated: bool,
-    indexes_kind: Option<String>,
+    indexes_kind: Option<Kind>,
 }
 
-type EdgeMap = HashMap<String, BTreeSet<String>>;
+type EdgeMap = HashMap<DocId, BTreeSet<DocId>>;
 
 struct Graph {
-    docs: BTreeMap<String, Doc>,
-    id_to_doc: HashMap<String, String>,
+    docs: BTreeMap<DocId, Doc>,
+    /// Maps every known id (including `provides:` aliases) to the id of the
+    /// owning doc in `docs`. A doc's primary id maps to itself.
+    id_to_doc: HashMap<DocId, DocId>,
     forward: EdgeMap,
     reverse: EdgeMap,
     related_forward: EdgeMap,
@@ -299,8 +390,8 @@ fn build_graph(
     doc_root: &Path,
     manifest: &Manifest,
 ) -> Result<(Graph, Vec<String>)> {
-    let mut docs: BTreeMap<String, Doc> = BTreeMap::new();
-    let mut id_to_doc: HashMap<String, String> = HashMap::new();
+    let mut docs: BTreeMap<DocId, Doc> = BTreeMap::new();
+    let mut id_to_doc: HashMap<DocId, DocId> = HashMap::new();
     let mut errors: Vec<String> = Vec::new();
 
     let scan_roots = derive_scan_roots(manifest, doc_root);
@@ -391,7 +482,7 @@ fn build_graph(
             //   kind == "index" iff generated == true
             //   indexes_kind.is_some() implies kind == "index"
             // Per-kind indexes set `indexes_kind`; the global map.md / modules.md leave it unset.
-            let is_index_kind = refs_block.kind == "index";
+            let is_index_kind = refs_block.kind.is_index();
             let has_indexes_kind = refs_block.indexes_kind.is_some();
             if is_index_kind != refs_block.generated {
                 errors.push(format!(
@@ -517,8 +608,8 @@ fn extract_frontmatter(raw: &str) -> Option<&str> {
 }
 
 fn build_edges(
-    docs: &BTreeMap<String, Doc>,
-    id_to_doc: &HashMap<String, String>,
+    docs: &BTreeMap<DocId, Doc>,
+    id_to_doc: &HashMap<DocId, DocId>,
     errors: &mut Vec<String>,
 ) -> (EdgeMap, EdgeMap, EdgeMap, EdgeMap) {
     let mut forward: EdgeMap = HashMap::new();
@@ -654,10 +745,13 @@ fn cmd_traverse(
     if ids.is_empty() {
         bail!("at least one id is required");
     }
-    let mut missing = Vec::new();
+    let mut missing: Vec<&str> = Vec::new();
+    let mut seeds: Vec<DocId> = Vec::with_capacity(ids.len());
     for id in ids {
-        if !graph.id_to_doc.contains_key(id) {
-            missing.push(id.clone());
+        if graph.id_to_doc.contains_key(id.as_str()) {
+            seeds.push(DocId::from(id.as_str()));
+        } else {
+            missing.push(id.as_str());
         }
     }
     if !missing.is_empty() {
@@ -680,16 +774,16 @@ fn cmd_traverse(
     }
     println!();
 
-    let mut seen: BTreeSet<String> = ids.iter().cloned().collect();
-    let mut frontier: VecDeque<(String, u32)> =
-        ids.iter().map(|id| (id.clone(), 0)).collect();
-    let mut layered: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
+    let mut seen: BTreeSet<DocId> = seeds.iter().cloned().collect();
+    let mut frontier: VecDeque<(DocId, u32)> =
+        seeds.iter().map(|id| (id.clone(), 0)).collect();
+    let mut layered: BTreeMap<u32, BTreeSet<DocId>> = BTreeMap::new();
 
     while let Some((cur, d)) = frontier.pop_front() {
         if d == depth {
             continue;
         }
-        let mut neighbors: BTreeSet<String> = BTreeSet::new();
+        let mut neighbors: BTreeSet<DocId> = BTreeSet::new();
         if let Some(s) = hard.get(&cur) {
             neighbors.extend(s.iter().cloned());
         }
@@ -713,7 +807,7 @@ fn cmd_traverse(
     for (d, set) in &layered {
         println!("depth {d}:");
         for id in set {
-            print_id_line(graph, id, "  ");
+            print_id_line(graph, id.as_str(), "  ");
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -730,7 +824,7 @@ fn cmd_show(graph: &Graph, id: &str) -> Result<ExitCode> {
         .ok_or_else(|| anyhow!("internal: doc `{doc_id}` missing"))?;
 
     println!("id:       {}", doc.id);
-    if doc.id != id {
+    if doc.id.as_str() != id {
         println!("queried:  {id}  (provided by {})", doc.id);
     }
     println!("kind:     {}", doc.kind);
@@ -755,7 +849,7 @@ fn cmd_show(graph: &Graph, id: &str) -> Result<ExitCode> {
     println!("Direct impact (hard, who depends on this doc):");
     if let Some(rev) = graph.reverse.get(&doc.id) {
         for r in rev {
-            print_id_line(graph, r, "  ");
+            print_id_line(graph, r.as_str(), "  ");
         }
     } else {
         println!("  (none)");
@@ -764,7 +858,7 @@ fn cmd_show(graph: &Graph, id: &str) -> Result<ExitCode> {
     println!("Soft mentions (related: from other docs):");
     if let Some(soft) = graph.related_reverse.get(&doc.id) {
         for r in soft {
-            print_id_line(graph, r, "  ");
+            print_id_line(graph, r.as_str(), "  ");
         }
     } else {
         println!("  (none)");
@@ -792,7 +886,7 @@ fn cmd_touched(
         rel_files.push(normalize_separators(&rel));
     }
 
-    let mut hits: BTreeSet<String> = BTreeSet::new();
+    let mut hits: BTreeSet<DocId> = BTreeSet::new();
     for doc in graph.docs.values() {
         for m in &doc.modules {
             let pat = normalize_separators(m);
@@ -815,15 +909,15 @@ fn cmd_touched(
     }
     println!("Docs of record (modules: covers these files):");
     for id in &hits {
-        print_id_line(graph, id, "  ");
+        print_id_line(graph, id.as_str(), "  ");
     }
 
     if no_closure {
         return Ok(ExitCode::SUCCESS);
     }
     let mut seen = hits.clone();
-    let mut frontier: VecDeque<String> = hits.iter().cloned().collect();
-    let mut indirect: BTreeSet<String> = BTreeSet::new();
+    let mut frontier: VecDeque<DocId> = hits.iter().cloned().collect();
+    let mut indirect: BTreeSet<DocId> = BTreeSet::new();
     while let Some(cur) = frontier.pop_front() {
         if let Some(rev) = graph.reverse.get(&cur) {
             for n in rev {
@@ -840,7 +934,7 @@ fn cmd_touched(
     println!();
     println!("Transitively affected:");
     for id in &indirect {
-        print_id_line(graph, id, "  ");
+        print_id_line(graph, id.as_str(), "  ");
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -889,7 +983,7 @@ fn write_map(root: &Path, doc_root: &Path, graph: &Graph) -> Result<ExitCode> {
     }
 
     // 1. Human-readable map.md
-    let mut by_kind: BTreeMap<String, Vec<&Doc>> = BTreeMap::new();
+    let mut by_kind: BTreeMap<Kind, Vec<&Doc>> = BTreeMap::new();
     for d in graph.docs.values() {
         if d.generated {
             continue;
@@ -925,7 +1019,7 @@ fn write_map(root: &Path, doc_root: &Path, graph: &Graph) -> Result<ExitCode> {
     println!("wrote {}", json_path.display());
 
     // 3. ai/modules.md
-    let mut by_module: BTreeMap<&String, BTreeSet<&String>> = BTreeMap::new();
+    let mut by_module: BTreeMap<&String, BTreeSet<&DocId>> = BTreeMap::new();
     for d in graph.docs.values() {
         for m in &d.modules {
             by_module.entry(m).or_default().insert(&d.id);
@@ -965,13 +1059,13 @@ fn doc_link(doc_root: &Path, rel_path: &Path) -> String {
 struct JsonGraph<'a> {
     schema_version: u32,
     docs: Vec<JsonDoc<'a>>,
-    modules: BTreeMap<&'a String, BTreeSet<&'a String>>,
+    modules: BTreeMap<&'a String, BTreeSet<&'a DocId>>,
 }
 
 #[derive(serde::Serialize)]
 struct JsonDoc<'a> {
-    id: &'a String,
-    kind: &'a String,
+    id: &'a DocId,
+    kind: &'a Kind,
     path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<&'a String>,
@@ -979,10 +1073,10 @@ struct JsonDoc<'a> {
     spec: Option<&'a String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     generated: bool,
-    provides: &'a [String],
-    implements: &'a [String],
-    depends_on: &'a [String],
-    related: &'a [String],
+    provides: &'a [DocId],
+    implements: &'a [DocId],
+    depends_on: &'a [DocId],
+    related: &'a [DocId],
     modules: &'a [String],
 }
 
@@ -1004,7 +1098,7 @@ fn build_graph_json(graph: &Graph) -> Result<String> {
             modules: &d.modules,
         })
         .collect();
-    let mut modules: BTreeMap<&String, BTreeSet<&String>> = BTreeMap::new();
+    let mut modules: BTreeMap<&String, BTreeSet<&DocId>> = BTreeMap::new();
     for d in graph.docs.values() {
         for m in &d.modules {
             modules.entry(m).or_default().insert(&d.id);
@@ -1095,7 +1189,7 @@ fn emit_kind_table(out: &mut String, docs: &[&Doc]) {
 }
 
 fn cmd_list(graph: &Graph) -> Result<ExitCode> {
-    let mut ids: Vec<&String> = graph.id_to_doc.keys().collect();
+    let mut ids: Vec<&DocId> = graph.id_to_doc.keys().collect();
     ids.sort();
     for id in ids {
         let Some(doc_id) = graph.id_to_doc.get(id) else {
@@ -1114,7 +1208,7 @@ fn cmd_list(graph: &Graph) -> Result<ExitCode> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn print_list(label: &str, xs: &[String]) {
+fn print_list<T: std::fmt::Display>(label: &str, xs: &[T]) {
     if xs.is_empty() {
         return;
     }
