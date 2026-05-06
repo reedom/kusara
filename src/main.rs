@@ -294,10 +294,9 @@ struct RefsBlock {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // indexes_kind is round-tripped from generated INDEX frontmatter; reserved for future use.
 struct Doc {
     id: DocId,
-    kind: Kind,
+    class: DocClass,
     title: Option<String>,
     spec: Option<String>,
     rel_path: PathBuf,
@@ -306,8 +305,48 @@ struct Doc {
     depends_on: Vec<DocId>,
     related: Vec<DocId>,
     modules: Vec<String>,
-    generated: bool,
-    indexes_kind: Option<Kind>,
+}
+
+/// Classifies a doc as either user-authored or `kssni`-generated.
+///
+/// The variants are mutually exclusive and capture the wire-format
+/// invariant `kind == "index" iff generated && indexes_kind.is_some()
+/// implies kind == "index"` so the impossible combinations are
+/// unrepresentable.
+#[derive(Debug, Clone)]
+enum DocClass {
+    /// Regular hand-authored doc with the given kind. Never `"index"`.
+    Regular(Kind),
+    /// Generated INDEX doc (`kind: index`, `generated: true`).
+    Index(IndexFlavor),
+}
+
+#[derive(Debug, Clone)]
+enum IndexFlavor {
+    /// Global INDEX (e.g. `map.md`, `ai/modules.md`); no `indexes_kind`.
+    Global,
+    /// Per-kind INDEX pointing at the named kind.
+    PerKind(Kind),
+}
+
+impl Doc {
+    fn kind(&self) -> Kind {
+        match &self.class {
+            DocClass::Regular(k) => k.clone(),
+            DocClass::Index(_) => Kind::from(Kind::INDEX_LITERAL),
+        }
+    }
+
+    fn generated(&self) -> bool {
+        matches!(self.class, DocClass::Index(_))
+    }
+
+    fn indexes_kind(&self) -> Option<&Kind> {
+        match &self.class {
+            DocClass::Index(IndexFlavor::PerKind(k)) => Some(k),
+            _ => None,
+        }
+    }
 }
 
 type EdgeMap = HashMap<DocId, BTreeSet<DocId>>;
@@ -478,34 +517,39 @@ fn build_graph(
                 ));
                 continue;
             }
-            // Index-doc invariants:
-            //   kind == "index" iff generated == true
-            //   indexes_kind.is_some() implies kind == "index"
-            // Per-kind indexes set `indexes_kind`; the global map.md / modules.md leave it unset.
-            let is_index_kind = refs_block.kind.is_index();
-            let has_indexes_kind = refs_block.indexes_kind.is_some();
-            if is_index_kind != refs_block.generated {
-                errors.push(format!(
-                    "{} ({}): kind=`{}` and generated={} must agree (kind `index` requires generated: true and vice versa)",
-                    rel.display(),
-                    refs_block.id,
-                    refs_block.kind,
-                    refs_block.generated,
-                ));
-                continue;
-            }
-            if has_indexes_kind && !is_index_kind {
-                errors.push(format!(
-                    "{} ({}): indexes_kind set on non-index doc (kind=`{}`)",
-                    rel.display(),
-                    refs_block.id,
-                    refs_block.kind,
-                ));
-                continue;
-            }
+            // Resolve the wire-format flags into one DocClass; reject any
+            // combination that would map to an unrepresentable variant.
+            let class = match (
+                refs_block.kind.is_index(),
+                refs_block.generated,
+                refs_block.indexes_kind.clone(),
+            ) {
+                (false, false, None) => DocClass::Regular(refs_block.kind.clone()),
+                (true, true, None) => DocClass::Index(IndexFlavor::Global),
+                (true, true, Some(k)) => DocClass::Index(IndexFlavor::PerKind(k)),
+                (true, false, _) | (false, true, _) => {
+                    errors.push(format!(
+                        "{} ({}): kind=`{}` and generated={} must agree (kind `index` requires generated: true and vice versa)",
+                        rel.display(),
+                        refs_block.id,
+                        refs_block.kind,
+                        refs_block.generated,
+                    ));
+                    continue;
+                }
+                (false, false, Some(_)) => {
+                    errors.push(format!(
+                        "{} ({}): indexes_kind set on non-index doc (kind=`{}`)",
+                        rel.display(),
+                        refs_block.id,
+                        refs_block.kind,
+                    ));
+                    continue;
+                }
+            };
             let doc = Doc {
                 id: refs_block.id.clone(),
-                kind: refs_block.kind.clone(),
+                class,
                 title: refs_block.title,
                 spec: refs_block.spec,
                 rel_path: rel.clone(),
@@ -514,8 +558,6 @@ fn build_graph(
                 depends_on: refs_block.depends_on,
                 related: refs_block.related,
                 modules: refs_block.modules,
-                generated: refs_block.generated,
-                indexes_kind: refs_block.indexes_kind,
             };
             if let Some(prev) = docs.get(&doc.id) {
                 errors.push(format!(
@@ -827,9 +869,12 @@ fn cmd_show(graph: &Graph, id: &str) -> Result<ExitCode> {
     if doc.id.as_str() != id {
         println!("queried:  {id}  (provided by {})", doc.id);
     }
-    println!("kind:     {}", doc.kind);
-    if doc.generated {
+    println!("kind:     {}", doc.kind());
+    if doc.generated() {
         println!("generated: true");
+        if let Some(k) = doc.indexes_kind() {
+            println!("indexes_kind: {k}");
+        }
     }
     if let Some(s) = &doc.spec {
         println!("spec:     {s}");
@@ -985,10 +1030,10 @@ fn write_map(root: &Path, doc_root: &Path, graph: &Graph) -> Result<ExitCode> {
     // 1. Human-readable map.md
     let mut by_kind: BTreeMap<Kind, Vec<&Doc>> = BTreeMap::new();
     for d in graph.docs.values() {
-        if d.generated {
+        if d.generated() {
             continue;
         }
-        by_kind.entry(d.kind.clone()).or_default().push(d);
+        by_kind.entry(d.kind()).or_default().push(d);
     }
     let mut map = String::new();
     map.push_str("---\nrefs:\n  id: index:map\n  kind: index\n  generated: true\n  title: \"Doc Map (all kinds)\"\n---\n\n");
@@ -1065,7 +1110,7 @@ struct JsonGraph<'a> {
 #[derive(serde::Serialize)]
 struct JsonDoc<'a> {
     id: &'a DocId,
-    kind: &'a Kind,
+    kind: Kind,
     path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<&'a String>,
@@ -1073,6 +1118,8 @@ struct JsonDoc<'a> {
     spec: Option<&'a String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     generated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    indexes_kind: Option<&'a Kind>,
     provides: &'a [DocId],
     implements: &'a [DocId],
     depends_on: &'a [DocId],
@@ -1086,11 +1133,12 @@ fn build_graph_json(graph: &Graph) -> Result<String> {
         .values()
         .map(|d| JsonDoc {
             id: &d.id,
-            kind: &d.kind,
+            kind: d.kind(),
             path: d.rel_path.display().to_string(),
             title: d.title.as_ref(),
             spec: d.spec.as_ref(),
-            generated: d.generated,
+            generated: d.generated(),
+            indexes_kind: d.indexes_kind(),
             provides: &d.provides,
             implements: &d.implements,
             depends_on: &d.depends_on,
@@ -1123,7 +1171,7 @@ fn write_per_kind_indexes(root: &Path, manifest: &Manifest, graph: &Graph) -> Re
         let mut docs: Vec<&Doc> = graph
             .docs
             .values()
-            .filter(|d| d.kind == kind.name && !d.generated)
+            .filter(|d| matches!(&d.class, DocClass::Regular(k) if *k == kind.name))
             .collect();
         docs.sort_by(|a, b| a.id.cmp(&b.id));
 
@@ -1199,7 +1247,7 @@ fn cmd_list(graph: &Graph) -> Result<ExitCode> {
             eprintln!("warning: id `{id}` resolves to missing doc `{doc_id}`");
             continue;
         };
-        println!("{:<40} {:<14} {}", id, doc.kind, doc.rel_path.display());
+        println!("{:<40} {:<14} {}", id, doc.kind(), doc.rel_path.display());
     }
     Ok(ExitCode::SUCCESS)
 }
