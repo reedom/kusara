@@ -65,6 +65,10 @@ kssni index
 
 `KSSNI_DOC_ROOT` (default `docs`) points at the directory containing `kinds.md` and where `map.md` / `ai/graph.json` are written.
 
+## Claude Code plugin
+
+This repo also ships a Claude Code plugin (`.claude-plugin/`) with `/kssni:sync`, `/kssni:check`, and `/kssni:add-ref` slash commands plus auto-loaded schema skills. See [`.claude-plugin/README.md`](.claude-plugin/README.md).
+
 ## License
 
 MIT
