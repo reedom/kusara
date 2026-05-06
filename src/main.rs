@@ -226,15 +226,7 @@ struct Graph {
 // ---------------------------------------------------------------------------
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    let root = cli
-        .root
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().expect("cwd"));
-    let doc_root = std::env::var("KSSNI_DOC_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_DOC_ROOT));
-    match run(&cli, &root, &doc_root) {
+    match real_main() {
         Ok(rc) => rc,
         Err(e) => {
             eprintln!("error: {e:#}");
@@ -243,9 +235,31 @@ fn main() -> ExitCode {
     }
 }
 
+fn real_main() -> Result<ExitCode> {
+    let cli = Cli::parse();
+    let root = match cli.root.clone() {
+        Some(p) => p,
+        None => std::env::current_dir().context("resolve current working directory")?,
+    };
+    let doc_root = match std::env::var("KSSNI_DOC_ROOT") {
+        Ok(s) => PathBuf::from(s),
+        Err(std::env::VarError::NotPresent) => PathBuf::from(DEFAULT_DOC_ROOT),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("KSSNI_DOC_ROOT is not valid UTF-8");
+        }
+    };
+    run(&cli, &root, &doc_root)
+}
+
 fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
     let manifest = Manifest::load(root, doc_root)?;
     let (graph, parse_errors) = build_graph(root, doc_root, &manifest)?;
+    if !matches!(cli.cmd, Cmd::Validate) && !parse_errors.is_empty() {
+        eprintln!(
+            "warning: {} parse error(s); run `kssni validate` for details",
+            parse_errors.len()
+        );
+    }
     match &cli.cmd {
         Cmd::Validate => cmd_validate(root, &manifest, &graph, &parse_errors),
         Cmd::Impact {
@@ -282,8 +296,13 @@ fn build_graph(
     let mut visited_files: BTreeSet<PathBuf> = BTreeSet::new();
     for rel in scan_roots {
         let scan = root.join(&rel);
-        if !scan.exists() {
-            continue;
+        match fs::metadata(&scan) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                errors.push(format!("scan root {}: {e}", scan.display()));
+                continue;
+            }
         }
         let walker = WalkDir::new(&scan).into_iter().filter_entry(|e| {
             !e.file_name()
@@ -291,7 +310,14 @@ fn build_graph(
                 .map(|n| SKIP_DIRS.contains(&n))
                 .unwrap_or(false)
         });
-        for entry in walker.filter_map(Result::ok) {
+        for entry in walker {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    errors.push(format!("walk {}: {e}", scan.display()));
+                    continue;
+                }
+            };
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -299,7 +325,15 @@ fn build_graph(
             if path.extension().and_then(|s| s.to_str()) != Some("md") {
                 continue;
             }
-            let rel = path.strip_prefix(root).unwrap_or(path).to_path_buf();
+            let Ok(rel_path) = path.strip_prefix(root) else {
+                errors.push(format!(
+                    "path {} escaped scan root {}",
+                    path.display(),
+                    root.display()
+                ));
+                continue;
+            };
+            let rel = rel_path.to_path_buf();
             if !visited_files.insert(rel.clone()) {
                 continue;
             }
@@ -311,8 +345,17 @@ fn build_graph(
                     continue;
                 }
             };
-            let Some(yaml) = extract_frontmatter(&raw) else {
-                continue;
+            let yaml = match extract_frontmatter(&raw) {
+                Some(y) => y,
+                None => {
+                    if raw.starts_with("---\n") || raw.starts_with("---\r\n") {
+                        errors.push(format!(
+                            "{}: malformed front matter (missing closing `---`)",
+                            rel.display()
+                        ));
+                    }
+                    continue;
+                }
             };
             let fm: FrontMatter = match serde_yaml_ng::from_str(yaml) {
                 Ok(v) => v,
@@ -356,6 +399,9 @@ fn build_graph(
                 ));
                 continue;
             }
+            // Collect provides without overwriting prior owners; first writer wins
+            // so traversal stays deterministic relative to the reported error.
+            let mut conflict = false;
             for pid in &doc.provides {
                 if let Some(owner) = id_to_doc.get(pid) {
                     errors.push(format!(
@@ -364,7 +410,13 @@ fn build_graph(
                         docs.get(owner).map(|d| d.rel_path.display().to_string()).unwrap_or_default(),
                         rel.display()
                     ));
+                    conflict = true;
                 }
+            }
+            if conflict {
+                continue;
+            }
+            for pid in &doc.provides {
                 id_to_doc.insert(pid.clone(), doc.id.clone());
             }
             id_to_doc.insert(doc.id.clone(), doc.id.clone());
@@ -1013,7 +1065,13 @@ fn cmd_list(graph: &Graph) -> Result<ExitCode> {
     let mut ids: Vec<&String> = graph.id_to_doc.keys().collect();
     ids.sort();
     for id in ids {
-        let doc = &graph.docs[&graph.id_to_doc[id]];
+        let Some(doc_id) = graph.id_to_doc.get(id) else {
+            continue;
+        };
+        let Some(doc) = graph.docs.get(doc_id) else {
+            eprintln!("warning: id `{id}` resolves to missing doc `{doc_id}`");
+            continue;
+        };
         println!("{:<40} {:<14} {}", id, doc.kind, doc.rel_path.display());
     }
     Ok(ExitCode::SUCCESS)
