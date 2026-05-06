@@ -789,14 +789,15 @@ fn cmd_touched(
             root.join(f)
         };
         let rel = abs.strip_prefix(root).unwrap_or(f).to_string_lossy().to_string();
-        rel_files.push(rel);
+        rel_files.push(normalize_separators(&rel));
     }
 
     let mut hits: BTreeSet<String> = BTreeSet::new();
     for doc in graph.docs.values() {
         for m in &doc.modules {
+            let pat = normalize_separators(m);
             for f in &rel_files {
-                if module_covers(m, f) {
+                if module_covers(&pat, f) {
                     hits.insert(doc.id.clone());
                 }
             }
@@ -850,6 +851,17 @@ fn module_covers(pattern: &str, file: &str) -> bool {
         file.starts_with(prefix) && file[prefix.len()..].starts_with('/')
     } else {
         file == pattern
+    }
+}
+
+/// Normalize platform path separators to forward slashes so `module_covers`
+/// can match consistently across Windows and Unix. Inputs already using `/`
+/// are unchanged.
+fn normalize_separators(s: &str) -> String {
+    if s.contains('\\') {
+        s.replace('\\', "/")
+    } else {
+        s.to_owned()
     }
 }
 
@@ -1139,6 +1151,25 @@ mod tests {
         assert!(module_covers("a/b/", "a/b/d/e.rs"));
         assert!(!module_covers("a/b/", "a/bc/x.rs"));
         assert!(!module_covers("a/b/", "a/b"));
+    }
+
+    #[test]
+    fn normalize_separators_passthrough_for_unix() {
+        assert_eq!(normalize_separators("a/b/c.rs"), "a/b/c.rs");
+        assert_eq!(normalize_separators(""), "");
+    }
+
+    #[test]
+    fn normalize_separators_rewrites_windows() {
+        assert_eq!(normalize_separators("a\\b\\c.rs"), "a/b/c.rs");
+        assert_eq!(normalize_separators("a/b\\c.rs"), "a/b/c.rs");
+    }
+
+    #[test]
+    fn module_covers_after_normalization() {
+        let pat = normalize_separators("src\\auth\\");
+        let file = normalize_separators("src\\auth\\session.rs");
+        assert!(module_covers(&pat, &file));
     }
 
     #[test]
