@@ -2,7 +2,25 @@
 
 Document-management workflows for [kssni](../README.md), packaged as a Claude Code plugin.
 
-The plugin lives inside the kssni repo so anyone cloning gets it auto-discovered when they open the repo with Claude Code.
+The plugin lives inside the kssni repo so anyone cloning gets it auto-discovered when they open the repo with Claude Code. The repo also ships a `marketplace.json` so users can install via Claude Code's marketplace mechanism without cloning.
+
+## Install
+
+Pick one:
+
+**1. As a Claude Code marketplace** (recommended for users who only want the slash commands):
+
+```text
+/plugin marketplace add reedom/kssni
+/plugin install kssni@kssni
+```
+
+**2. From the local repo** (developers hacking on kssni itself):
+
+```sh
+git clone https://github.com/reedom/kssni
+# then open the cloned directory in Claude Code — the plugin auto-discovers.
+```
 
 ## What's inside
 
@@ -48,7 +66,8 @@ Use `/kssni:check` between rounds for a read-only health pulse.
 
 ```text
 .claude-plugin/
-  plugin.json
+  plugin.json         ← plugin manifest
+  marketplace.json    ← marketplace listing (single-plugin repo)
   README.md           ← you are here
 commands/
   setup.md
