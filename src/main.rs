@@ -908,7 +908,7 @@ fn write_map(root: &Path, doc_root: &Path, graph: &Graph) -> Result<ExitCode> {
     println!("wrote {}", map_path.display());
 
     // 2. AI graph.json
-    let json = build_graph_json(graph);
+    let json = build_graph_json(graph)?;
     fs::write(&json_path, json).with_context(|| format!("write {}", json_path.display()))?;
     println!("wrote {}", json_path.display());
 
@@ -949,78 +949,63 @@ fn doc_link(doc_root: &Path, rel_path: &Path) -> String {
     format!("{}{}", up, rel_path.display())
 }
 
-fn build_graph_json(graph: &Graph) -> String {
-    // Hand-rolled JSON to avoid adding serde_json for ~80 lines.
-    let mut s = String::new();
-    s.push_str("{\n  \"schema_version\": 1,\n  \"docs\": [\n");
-    let mut first = true;
-    for d in graph.docs.values() {
-        if !first {
-            s.push_str(",\n");
-        }
-        first = false;
-        s.push_str("    {");
-        s.push_str(&format!("\"id\": {}", json_str(&d.id)));
-        s.push_str(&format!(", \"kind\": {}", json_str(&d.kind)));
-        s.push_str(&format!(", \"path\": {}", json_str(&d.rel_path.display().to_string())));
-        if let Some(t) = &d.title {
-            s.push_str(&format!(", \"title\": {}", json_str(t)));
-        }
-        if let Some(spec) = &d.spec {
-            s.push_str(&format!(", \"spec\": {}", json_str(spec)));
-        }
-        if d.generated {
-            s.push_str(", \"generated\": true");
-        }
-        s.push_str(&format!(", \"provides\": {}", json_arr(&d.provides)));
-        s.push_str(&format!(", \"implements\": {}", json_arr(&d.implements)));
-        s.push_str(&format!(", \"depends_on\": {}", json_arr(&d.depends_on)));
-        s.push_str(&format!(", \"related\": {}", json_arr(&d.related)));
-        s.push_str(&format!(", \"modules\": {}", json_arr(&d.modules)));
-        s.push('}');
-    }
-    s.push_str("\n  ],\n  \"modules\": {\n");
-    let mut by_module: BTreeMap<&String, BTreeSet<&String>> = BTreeMap::new();
+#[derive(serde::Serialize)]
+struct JsonGraph<'a> {
+    schema_version: u32,
+    docs: Vec<JsonDoc<'a>>,
+    modules: BTreeMap<&'a String, BTreeSet<&'a String>>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonDoc<'a> {
+    id: &'a String,
+    kind: &'a String,
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spec: Option<&'a String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    generated: bool,
+    provides: &'a [String],
+    implements: &'a [String],
+    depends_on: &'a [String],
+    related: &'a [String],
+    modules: &'a [String],
+}
+
+fn build_graph_json(graph: &Graph) -> Result<String> {
+    let docs: Vec<JsonDoc> = graph
+        .docs
+        .values()
+        .map(|d| JsonDoc {
+            id: &d.id,
+            kind: &d.kind,
+            path: d.rel_path.display().to_string(),
+            title: d.title.as_ref(),
+            spec: d.spec.as_ref(),
+            generated: d.generated,
+            provides: &d.provides,
+            implements: &d.implements,
+            depends_on: &d.depends_on,
+            related: &d.related,
+            modules: &d.modules,
+        })
+        .collect();
+    let mut modules: BTreeMap<&String, BTreeSet<&String>> = BTreeMap::new();
     for d in graph.docs.values() {
         for m in &d.modules {
-            by_module.entry(m).or_default().insert(&d.id);
+            modules.entry(m).or_default().insert(&d.id);
         }
     }
-    let mut first = true;
-    for (m, ids) in &by_module {
-        if !first {
-            s.push_str(",\n");
-        }
-        first = false;
-        let v: Vec<&String> = ids.iter().copied().collect();
-        let v_str: Vec<String> = v.iter().map(|x| (*x).clone()).collect();
-        s.push_str(&format!("    {}: {}", json_str(m), json_arr(&v_str)));
-    }
-    s.push_str("\n  }\n}\n");
-    s
-}
-
-fn json_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn json_arr(xs: &[String]) -> String {
-    let parts: Vec<String> = xs.iter().map(|x| json_str(x)).collect();
-    format!("[{}]", parts.join(", "))
+    let payload = JsonGraph {
+        schema_version: 1,
+        docs,
+        modules,
+    };
+    let mut s = serde_json::to_string_pretty(&payload).context("serialize graph.json")?;
+    s.push('\n');
+    Ok(s)
 }
 
 fn write_per_kind_indexes(root: &Path, manifest: &Manifest, graph: &Graph) -> Result<ExitCode> {
