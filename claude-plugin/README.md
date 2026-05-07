@@ -66,26 +66,27 @@ Use `/kusara:check` between rounds for a read-only health pulse.
 
 ```text
 .claude-plugin/
-  plugin.json         ← plugin manifest
   marketplace.json    ← marketplace listing (single-plugin repo)
+claude-plugin/
+  plugin.json         ← plugin manifest
   README.md           ← you are here
-commands/
-  setup.md
-  sync.md
-  check.md
-  add-ref.md
-skills/
-  refs-schema/
-    SKILL.md
-    references/
-      refs.md
-      relations-cheatsheet.md
-  kinds-manifest/
-    SKILL.md
-    references/
-      kinds.md
-agents/
-  doc-maintainer.md
+  commands/
+    setup.md
+    sync.md
+    check.md
+    add-ref.md
+  skills/
+    refs-schema/
+      SKILL.md
+      references/
+        refs.md
+        relations-cheatsheet.md
+    kinds-manifest/
+      SKILL.md
+      references/
+        kinds.md
+  agents/
+    doc-maintainer.md
 ```
 
 ## License
