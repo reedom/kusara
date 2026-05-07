@@ -13,7 +13,7 @@
   "plugins": [
     {
       "name": "kusara",
-      "source": "./",
+      "source": "./claude-plugin",
       "description": "Slash commands and skills wrapping the kusara CLI: /kusara:setup installs the binary, /kusara:sync auto-maintains related docs after code or doc changes (parallel fan-out at 4+ affected docs), /kusara:check audits cross-references, /kusara:add-ref authors `refs:` frontmatter. Auto-loaded skills carry the canonical schema and kinds-manifest format.",
       "category": "development",
       "keywords": ["kusara", "documentation", "markdown", "cross-reference", "frontmatter", "rust"],

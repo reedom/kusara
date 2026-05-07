@@ -67,7 +67,7 @@ kusara index
 
 ## Claude Code plugin
 
-This repo also ships a Claude Code plugin (`.claude-plugin/`) with `/kusara:sync`, `/kusara:check`, and `/kusara:add-ref` slash commands plus auto-loaded schema skills. See [`.claude-plugin/README.md`](.claude-plugin/README.md).
+This repo also ships a Claude Code plugin (`claude-plugin/`, listed via `.claude-plugin/marketplace.json`) with `/kusara:sync`, `/kusara:check`, and `/kusara:add-ref` slash commands plus auto-loaded schema skills. See [`claude-plugin/README.md`](claude-plugin/README.md).
 
 ## License
 
