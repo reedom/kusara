@@ -1,23 +1,23 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "kssni",
+  "name": "kusara",
   "owner": {
     "name": "HANAI Tohru",
     "email": "tohru@reedom.com",
     "url": "https://github.com/reedom"
   },
   "metadata": {
-    "description": "Document-management workflows for kssni: validate, audit, and auto-maintain Markdown specs and docs cross-referenced via the kssni CLI.",
+    "description": "Document-management workflows for kusara: validate, audit, and auto-maintain Markdown specs and docs cross-referenced via the kusara CLI.",
     "version": "0.1.0"
   },
   "plugins": [
     {
-      "name": "kssni",
-      "source": "./",
-      "description": "Slash commands and skills wrapping the kssni CLI: /kssni:setup installs the binary, /kssni:sync auto-maintains related docs after code or doc changes (parallel fan-out at 4+ affected docs), /kssni:check audits cross-references, /kssni:add-ref authors `refs:` frontmatter. Auto-loaded skills carry the canonical schema and kinds-manifest format.",
+      "name": "kusara",
+      "source": "./claude-plugin",
+      "description": "Slash commands and skills wrapping the kusara CLI: /kusara:setup installs the binary, /kusara:sync auto-maintains related docs after code or doc changes (parallel fan-out at 4+ affected docs), /kusara:check audits cross-references, /kusara:add-ref authors `refs:` frontmatter. Auto-loaded skills carry the canonical schema and kinds-manifest format.",
       "category": "development",
-      "keywords": ["kssni", "documentation", "markdown", "cross-reference", "frontmatter", "rust"],
-      "homepage": "https://github.com/reedom/kssni",
+      "keywords": ["kusara", "documentation", "markdown", "cross-reference", "frontmatter", "rust"],
+      "homepage": "https://github.com/reedom/kusara",
       "license": "MIT"
     }
   ]

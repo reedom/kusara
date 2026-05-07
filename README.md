@@ -1,8 +1,8 @@
-# kssni
+# kusara
 
 Cross-reference graph tooling for Markdown specs and docs.
 
-`kssni` reads YAML `refs:` frontmatter across a repository and answers dependency, doc-of-record, and per-kind index queries. Hand-edited frontmatter, machine-checked graph.
+`kusara` reads YAML `refs:` frontmatter across a repository and answers dependency, doc-of-record, and per-kind index queries. Hand-edited frontmatter, machine-checked graph.
 
 - Schema and conventions: [`docs/refs.md`](docs/refs.md)
 - Kind manifest: [`docs/kinds.md`](docs/kinds.md)
@@ -13,7 +13,7 @@ Cross-reference graph tooling for Markdown specs and docs.
 cargo install --path .
 ```
 
-Binary name: `kssni`.
+Binary name: `kusara`.
 
 ## Quick start
 
@@ -37,37 +37,37 @@ Binary name: `kssni`.
 3. Run:
 
    ```sh
-   kssni validate
-   kssni list
-   kssni show ref:auth-overview
-   kssni impact ref:auth-overview
-   kssni touched src/auth/session.rs
-   kssni index map           # writes map.md + ai/graph.json + ai/modules.md
-   kssni index               # writes per-kind index.md files
+   kusara validate
+   kusara list
+   kusara show ref:auth-overview
+   kusara impact ref:auth-overview
+   kusara touched src/auth/session.rs
+   kusara index map           # writes map.md + ai/graph.json + ai/modules.md
+   kusara index               # writes per-kind index.md files
    ```
 
 ## Subcommands
 
 ```sh
-kssni validate
-kssni impact <id> [<id>...] [--depth <N>] [--include-related]
-kssni deps   <id> [<id>...] [--depth <N>] [--include-related]
-kssni show   <id>
-kssni touched <file> [<file>...] [--no-closure]
-kssni list
-kssni index map
-kssni index
+kusara validate
+kusara impact <id> [<id>...] [--depth <N>] [--include-related]
+kusara deps   <id> [<id>...] [--depth <N>] [--include-related]
+kusara show   <id>
+kusara touched <file> [<file>...] [--no-closure]
+kusara list
+kusara index map
+kusara index
 ```
 
 `--root <DIR>` (global): override the repo root (default: cwd).
 
 ## Configuration
 
-`KSSNI_DOC_ROOT` (default `docs`) points at the directory containing `kinds.md` and where `map.md` / `ai/graph.json` are written.
+`KUSARA_DOC_ROOT` (default `docs`) points at the directory containing `kinds.md` and where `map.md` / `ai/graph.json` are written.
 
 ## Claude Code plugin
 
-This repo also ships a Claude Code plugin (`.claude-plugin/`) with `/kssni:sync`, `/kssni:check`, and `/kssni:add-ref` slash commands plus auto-loaded schema skills. See [`.claude-plugin/README.md`](.claude-plugin/README.md).
+This repo also ships a Claude Code plugin (`claude-plugin/`, listed via `.claude-plugin/marketplace.json`) with `/kusara:sync`, `/kusara:check`, and `/kusara:add-ref` slash commands plus auto-loaded schema skills. See [`claude-plugin/README.md`](claude-plugin/README.md).
 
 ## License
 

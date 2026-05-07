@@ -16,8 +16,8 @@ Decision table for picking between `implements`, `depends_on`, `related`, `provi
 
 - Listing every doc you mention in prose under `related:` → noise. Reserve `related:` for genuine see-also.
 - Putting `implements:` in BOTH directions → choose one direction (downstream → upstream). The graph is single-directional for hard edges.
-- Using `depends_on:` for soft "see-also" → use `related:` instead. `depends_on` participates in `kssni impact`; `related` only does so with `--include-related`.
-- Setting `generated:` or `indexes_kind:` by hand → never. Index files are written by `kssni index` only.
+- Using `depends_on:` for soft "see-also" → use `related:` instead. `depends_on` participates in `kusara impact`; `related` only does so with `--include-related`.
+- Setting `generated:` or `indexes_kind:` by hand → never. Index files are written by `kusara index` only.
 
 ## Quick example
 

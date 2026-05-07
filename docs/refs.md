@@ -1,10 +1,10 @@
 # Cross-Reference Schema (`refs`)
 
-Machine-readable cross-references between roadmap, specs, FR pages, reference pages, and source modules. Markdown files in directories scanned by `kssni` SHOULD carry a `refs:` block in their YAML front matter.
+Machine-readable cross-references between roadmap, specs, FR pages, reference pages, and source modules. Markdown files in directories scanned by `kusara` SHOULD carry a `refs:` block in their YAML front matter.
 
-[`kssni`](../README.md) consumes these blocks. Hand-edited, not generated.
+[`kusara`](../README.md) consumes these blocks. Hand-edited, not generated.
 
-Valid kinds are configured in [`kinds.md`](kinds.md) (resolved at runtime as `${KSSNI_DOC_ROOT}/kinds.md`, default `KSSNI_DOC_ROOT=docs`). Adding a kind = edit that manifest, no code change.
+Valid kinds are configured in [`kinds.md`](kinds.md) (resolved at runtime as `${KUSARA_DOC_ROOT}/kinds.md`, default `KUSARA_DOC_ROOT=docs`). Adding a kind = edit that manifest, no code change.
 
 ## Front-matter shape
 
@@ -26,14 +26,14 @@ refs:
   modules:                       # optional, repo-relative source paths or dir prefixes
     - <path>
     - <path-prefix>/             # trailing slash: any file under this directory
-  generated: false               # set by `kssni index` on generated INDEX files
-  indexes_kind: <kind>           # set by `kssni index` on per-kind INDEX files
+  generated: false               # set by `kusara index` on generated INDEX files
+  indexes_kind: <kind>           # set by `kusara index` on per-kind INDEX files
 ---
 ```
 
 All list fields default to empty.
 
-`generated:` and `indexes_kind:` are written by `kssni index` on generated INDEX files (kind `index`). Do not set them by hand on regular docs.
+`generated:` and `indexes_kind:` are written by `kusara index` on generated INDEX files (kind `index`). Do not set them by hand on regular docs.
 
 ## Relation semantics
 
@@ -45,7 +45,7 @@ All list fields default to empty.
 | `provides` | "I declare these additional IDs inside my body." | self → child IDs | hard |
 | `modules` | "I am the design of record for these source paths." | doc → code | hard |
 
-`kssni impact` traverses the forward graph (`implements` + `depends_on`). `related` is informational by default; `--include-related` includes it in the traversal.
+`kusara impact` traverses the forward graph (`implements` + `depends_on`). `related` is informational by default; `--include-related` includes it in the traversal.
 
 ## ID grammar
 
@@ -82,7 +82,7 @@ The validator does not parse the body; `provides` is the source of truth for wha
 
 ## Modules
 
-`modules:` declares "this doc is the documentation of record for that source path." `kssni touched <files>` reverses the relationship.
+`modules:` declares "this doc is the documentation of record for that source path." `kusara touched <files>` reverses the relationship.
 
 - No trailing slash: literal file path.
 - Trailing slash: directory prefix (any file underneath).
@@ -93,7 +93,7 @@ modules:
   - src/auth/                  # any file under this directory
 ```
 
-A file MAY appear in multiple docs' `modules:` lists; `kssni` surfaces all.
+A file MAY appear in multiple docs' `modules:` lists; `kusara` surfaces all.
 
 ## Authoring workflow
 
@@ -107,23 +107,23 @@ Prose "Traceability" sections (if any) MUST agree with front matter. Cross-check
 
 ## Generated index files
 
-`kssni index` writes per-kind `index.md` for kinds with `index.output` set. Graph nodes (`kind: index`, `generated: true`); never hand-edit. Sibling `README.md` may carry human narrative.
+`kusara index` writes per-kind `index.md` for kinds with `index.output` set. Graph nodes (`kind: index`, `generated: true`); never hand-edit. Sibling `README.md` may carry human narrative.
 
-`kssni index map` writes `${KSSNI_DOC_ROOT}/map.md`, `${KSSNI_DOC_ROOT}/ai/graph.json`, and `${KSSNI_DOC_ROOT}/ai/modules.md`.
+`kusara index map` writes `${KUSARA_DOC_ROOT}/map.md`, `${KUSARA_DOC_ROOT}/ai/graph.json`, and `${KUSARA_DOC_ROOT}/ai/modules.md`.
 
 Naming: only `README.md` is capitalized; all other generated/config files lowercase.
 
 ## Tooling reference
 
 ```sh
-kssni validate
-kssni impact <id> [<id>...] [--depth <N>] [--include-related]
-kssni deps   <id> [<id>...] [--depth <N>] [--include-related]
-kssni show   <id>
-kssni touched <file> [<file>...] [--no-closure]
-kssni list
-kssni index map     # writes map.md + ai/graph.json + ai/modules.md
-kssni index         # writes per-kind index.md files
+kusara validate
+kusara impact <id> [<id>...] [--depth <N>] [--include-related]
+kusara deps   <id> [<id>...] [--depth <N>] [--include-related]
+kusara show   <id>
+kusara touched <file> [<file>...] [--no-closure]
+kusara list
+kusara index map     # writes map.md + ai/graph.json + ai/modules.md
+kusara index         # writes per-kind index.md files
 ```
 
 ## Out of scope

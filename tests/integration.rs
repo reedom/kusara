@@ -22,8 +22,8 @@ fn write(root: &Path, rel: &str, body: &str) {
 }
 
 fn ks(root: &Path) -> Command {
-    let mut cmd = Command::cargo_bin("kssni").expect("bin");
-    cmd.arg("--root").arg(root).env_remove("KSSNI_DOC_ROOT");
+    let mut cmd = Command::cargo_bin("kusara").expect("bin");
+    cmd.arg("--root").arg(root).env_remove("KUSARA_DOC_ROOT");
     cmd
 }
 
@@ -448,32 +448,32 @@ fn index_then_validate_roundtrips() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn kssni_doc_root_env_override_loads_alternate_manifest() {
+fn kusara_doc_root_env_override_loads_alternate_manifest() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "specs/kinds.md", MIN_KINDS_MD);
-    Command::cargo_bin("kssni")
+    Command::cargo_bin("kusara")
         .unwrap()
         .arg("--root")
         .arg(dir.path())
-        .env("KSSNI_DOC_ROOT", "specs")
+        .env("KUSARA_DOC_ROOT", "specs")
         .arg("validate")
         .assert()
         .success();
 }
 
 #[test]
-fn kssni_doc_root_invalid_unicode_bails() {
+fn kusara_doc_root_invalid_unicode_bails() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
     let dir = fixture(MIN_KINDS_MD);
     let bad = OsString::from_vec(vec![0xff, 0xfe]);
-    Command::cargo_bin("kssni")
+    Command::cargo_bin("kusara")
         .unwrap()
         .arg("--root")
         .arg(dir.path())
-        .env("KSSNI_DOC_ROOT", bad)
+        .env("KUSARA_DOC_ROOT", bad)
         .arg("validate")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("KSSNI_DOC_ROOT"));
+        .stderr(predicate::str::contains("KUSARA_DOC_ROOT"));
 }

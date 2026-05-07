@@ -1,9 +1,9 @@
 ---
 name: refs-schema
-description: Authoritative schema for the kssni `refs:` YAML frontmatter block. Use whenever editing, authoring, validating, or interpreting `refs:` frontmatter in Markdown docs scanned by kssni — including fields like `id`, `kind`, `implements`, `depends_on`, `related`, `provides`, `modules`, `generated`, `indexes_kind`. Also use when answering questions about kssni cross-reference semantics or relation strength (hard vs soft).
+description: Authoritative schema for the kusara `refs:` YAML frontmatter block. Use whenever editing, authoring, validating, or interpreting `refs:` frontmatter in Markdown docs scanned by kusara — including fields like `id`, `kind`, `implements`, `depends_on`, `related`, `provides`, `modules`, `generated`, `indexes_kind`. Also use when answering questions about kusara cross-reference semantics or relation strength (hard vs soft).
 ---
 
-# kssni `refs:` frontmatter schema
+# kusara `refs:` frontmatter schema
 
 This skill is the single source of truth for the shape and semantics of `refs:` blocks. Use it before editing frontmatter or judging validator errors. The body below is the schema; the `references/` directory carries the verbatim project doc.
 
@@ -27,8 +27,8 @@ refs:
   modules:                       # optional, source paths or dir prefixes
     - <path>
     - <path-prefix>/             # trailing slash = directory prefix
-  generated: false               # set by `kssni index` only
-  indexes_kind: <kind>           # set by `kssni index` only
+  generated: false               # set by `kusara index` only
+  indexes_kind: <kind>           # set by `kusara index` only
 ---
 ```
 
@@ -44,7 +44,7 @@ All list fields default to empty.
 | `provides`   | "I declare these IDs inside my body."         | self → child IDs        | hard     |
 | `modules`    | "I am the doc of record for these paths."     | doc → code              | hard     |
 
-`kssni impact` traverses `implements + depends_on`. `related` joins traversal only with `--include-related`.
+`kusara impact` traverses `implements + depends_on`. `related` joins traversal only with `--include-related`.
 
 ## ID grammar
 
@@ -66,7 +66,7 @@ id := <kind> | <kind>:<scope> | <kind>:<scope>:<sub>
 
 ## Forbidden hand-edits
 
-Never set these by hand on regular docs. They are written exclusively by `kssni index`:
+Never set these by hand on regular docs. They are written exclusively by `kusara index`:
 - `generated:`
 - `indexes_kind:`
 
@@ -80,7 +80,7 @@ When adding or updating a `refs:` block:
 4. `depends_on:` lists artifacts this doc would be incorrect without (hard).
 5. `related:` lists weak see-also links (soft).
 6. `modules:` lists source paths this doc is the design of record for.
-7. Run `kssni validate` after the edit.
+7. Run `kusara validate` after the edit.
 
 ## Validator behaviour
 
@@ -93,5 +93,5 @@ If the body above conflicts with the project doc, the project doc wins. Read `re
 
 ## References
 
-- `references/refs.md` — verbatim copy of `docs/refs.md` from the kssni repo (the canonical schema).
+- `references/refs.md` — verbatim copy of `docs/refs.md` from the kusara repo (the canonical schema).
 - `references/relations-cheatsheet.md` — quick lookup table for which relation to use.
