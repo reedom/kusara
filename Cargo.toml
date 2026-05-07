@@ -1,17 +1,17 @@
 [package]
-name = "kssni"
+name = "kusara"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-repository = "https://github.com/reedom/kssni"
+repository = "https://github.com/reedom/kusara"
 description = "Cross-reference graph tooling for Markdown specs and docs"
 readme = "README.md"
 keywords = ["markdown", "documentation", "cross-reference", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
-name = "kssni"
+name = "kusara"
 path = "src/main.rs"
 
 [dependencies]
