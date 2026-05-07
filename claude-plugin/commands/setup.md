@@ -1,5 +1,5 @@
 ---
-description: Install or upgrade the kusara CLI binary. User-confirmed; no silent builds.
+description: Install or upgrade the kusara CLI binary from crates.io. User-confirmed; no silent installs.
 argument-hint: "[--upgrade] [--from-source <path>]"
 allowed-tools: Bash, Read
 disable-model-invocation: true
@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # /kusara:setup — install or upgrade the kusara CLI
 
-Install the `kusara` binary so the other `/kusara:*` commands can run. Always show the user what you are about to do and wait for explicit confirmation before invoking `cargo install`.
+Install the `kusara` binary from crates.io so the other `/kusara:*` commands can run. Always show the user what you are about to do and wait for explicit confirmation before invoking `cargo install`.
 
 ## Inputs
 
@@ -15,7 +15,7 @@ Arguments: `$ARGUMENTS`
 
 Flags:
 - `--upgrade` → reinstall even if already present (force fresh build).
-- `--from-source <path>` → use that path as the cargo source. Default discovery order is in Step 2.
+- `--from-source <path>` → install from a local source directory instead of crates.io. Path's `Cargo.toml` must have `[package].name = "kusara"`.
 
 ## Step 1 — Detect current state
 
@@ -28,18 +28,15 @@ Flags:
    cargo:  <path or "(not installed)"> [<version if any>]
    ```
 
-## Step 2 — Decide source path
+## Step 2 — Decide install source
 
-Discover the source directory for `cargo install --path <dir>`:
+Default: install from crates.io (`cargo install kusara --locked`).
 
-1. If `--from-source <path>` was given, use it. Verify `<path>/Cargo.toml` exists and its `[package].name` is `kusara`.
-2. Else if `$CLAUDE_PLUGIN_ROOT/Cargo.toml` exists and its `[package].name` is `kusara`, use `$CLAUDE_PLUGIN_ROOT` (the plugin lives in the kusara source repo — common case).
-3. Else, source path is unknown. Tell the user:
-   - "Plugin is installed standalone (not in the kusara source repo). Provide the path with `--from-source <path>`, or clone the repo:"
-   - `git clone https://github.com/reedom/kusara && /kusara:setup --from-source ./kusara`
-   - Stop.
+If `--from-source <path>` was given:
+1. Verify `<path>/Cargo.toml` exists and `[package].name` is `kusara`. If not, print the mismatch and stop.
+2. Use `cargo install --path <path> --locked` instead.
 
-Print the resolved source path before continuing.
+Print the resolved install command before continuing.
 
 ## Step 3 — Decide whether to install
 
@@ -49,33 +46,42 @@ Print the resolved source path before continuing.
 
 ## Step 4 — Confirm with the user
 
-Before running `cargo install`, print the exact command you will execute, e.g.:
+If `cargo` was not found in Step 1, do **not** ask for confirmation. Print:
+- "cargo is not on $PATH. Install Rust toolchain via https://rustup.rs first, then re-run /kusara:setup."
+- Stop.
+
+Otherwise, print the exact command you will execute, e.g.:
+
+```
+About to run:
+  cargo install kusara --locked
+This will download and compile kusara from crates.io and place the binary in $CARGO_HOME/bin (typically ~/.cargo/bin).
+```
+
+Or for `--from-source`:
 
 ```
 About to run:
   cargo install --path /Users/.../kusara --locked
-This will compile kusara and place the binary in $CARGO_HOME/bin (typically ~/.cargo/bin).
 ```
 
 Ask: "Proceed? (yes/no)" — wait for the user's reply. Only continue on an explicit affirmative.
 
-If `cargo` was not found in Step 1, do **not** ask for confirmation. Instead print:
-- "cargo is not on $PATH. Install Rust toolchain via https://rustup.rs first, then re-run /kusara:setup."
-- Stop.
-
 ## Step 5 — Install
 
-Run:
+Default (crates.io):
 
 ```sh
-cargo install --path "<resolved-source-path>" --locked
+cargo install kusara --locked
 ```
 
-If `--upgrade`, append `--force`:
+With `--from-source <path>`:
 
 ```sh
-cargo install --path "<resolved-source-path>" --locked --force
+cargo install --path "<path>" --locked
 ```
+
+If `--upgrade`, append `--force` to either form.
 
 Stream the output to the user. Do not capture-and-replay; let the build progress show live.
 
@@ -94,5 +100,5 @@ Stream the output to the user. Do not capture-and-replay; let the build progress
 
 - Never run `cargo install` without an explicit user "yes" in Step 4 (unless skipping for the cargo-missing branch, which only prints).
 - Never run `sudo`. Never modify `$PATH` for the user. Never write to shell rc files.
-- Never download arbitrary binaries from the network. Source path must resolve to a local directory whose `Cargo.toml` declares `name = "kusara"`.
+- Default install source is crates.io. `--from-source` only accepts a local directory whose `Cargo.toml` declares `name = "kusara"`.
 - This command does not call any other `/kusara:*` command and is not called by them; the others print a hint pointing here when the binary is missing.
