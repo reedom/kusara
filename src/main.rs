@@ -15,6 +15,7 @@ const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules"];
 #[derive(Parser)]
 #[command(
     name = "kusara",
+    version,
     about = "Cross-reference graph tooling for Markdown specs and docs"
 )]
 struct Cli {

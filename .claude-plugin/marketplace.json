@@ -8,7 +8,7 @@
   },
   "metadata": {
     "description": "Document-management workflows for kusara: validate, audit, and auto-maintain Markdown specs and docs cross-referenced via the kusara CLI.",
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "plugins": [
     {

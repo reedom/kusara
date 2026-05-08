@@ -1,6 +1,6 @@
 {
   "name": "kusara",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Document-management workflows for kusara: validate, audit, and auto-maintain related Markdown docs after changes.",
   "author": {
     "name": "HANAI Tohru",
