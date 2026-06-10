@@ -199,6 +199,23 @@ fn validate_strict_glob_coverage_html() {
 }
 
 #[test]
+fn validate_html_invalid_yaml_reports_parse_error() {
+    let dir = fixture(HTML_KINDS_MD);
+    // Well-formed block, but the YAML body is invalid (unclosed flow sequence).
+    // Must surface the same parse error as malformed Markdown front matter.
+    write(
+        dir.path(),
+        "docs/specs/foo.html",
+        "<script type=\"application/kusara+yaml\">\nrefs:\n  id: [unclosed\n</script>\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("front matter parse error"));
+}
+
+#[test]
 fn validate_dangling_reference() {
     let dir = fixture(MIN_KINDS_MD);
     write(
