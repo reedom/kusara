@@ -635,6 +635,77 @@ fn extract_frontmatter(raw: &str) -> Option<&str> {
     Some(&body[..end])
 }
 
+const HTML_META_TYPE: &str = "application/kusara+yaml";
+
+/// Result of scanning an HTML doc for its embedded `refs:` metadata block.
+enum HtmlMeta<'a> {
+    /// Inner text of the first matching `<script>` block (the `refs:` YAML).
+    Found(&'a str),
+    /// No matching metadata block present.
+    None,
+    /// A matching opening tag was found but never closed.
+    Unterminated,
+}
+
+/// Extracts the body of the first
+/// `<script type="application/kusara+yaml">…</script>` block.
+///
+/// Tag name and attributes are matched case-insensitively (HTML is
+/// case-insensitive). The whole file is scanned — the block need not be in
+/// `<head>` — and the first matching block wins, mirroring "first frontmatter
+/// wins" for Markdown. Script raw-text content needs no entity decoding.
+fn extract_html_metadata(raw: &str) -> HtmlMeta<'_> {
+    // Lowercase copy for case-insensitive search. `to_ascii_lowercase` only
+    // rewrites ASCII bytes, so byte offsets stay aligned with `raw`.
+    let lower = raw.to_ascii_lowercase();
+    let mut from = 0usize;
+    loop {
+        let Some(rel) = lower[from..].find("<script") else {
+            return HtmlMeta::None;
+        };
+        let tag_start = from + rel;
+        let after_kw = tag_start + "<script".len();
+        // Require a tag boundary so `<scriptx` does not match `<script`.
+        match lower[after_kw..].chars().next() {
+            Some(c) if c.is_ascii_whitespace() || c == '>' => {}
+            _ => {
+                from = after_kw;
+                continue;
+            }
+        }
+        let Some(rel_gt) = lower[after_kw..].find('>') else {
+            return HtmlMeta::Unterminated;
+        };
+        let tag_end = after_kw + rel_gt; // byte index of '>'
+        let open_tag = &lower[tag_start..tag_end]; // excludes '>'
+        if script_type_matches(open_tag) {
+            let content_start = tag_end + 1;
+            let Some(rel_close) = lower[content_start..].find("</script") else {
+                return HtmlMeta::Unterminated;
+            };
+            let content_end = content_start + rel_close;
+            return HtmlMeta::Found(&raw[content_start..content_end]);
+        }
+        from = tag_end + 1;
+    }
+}
+
+/// True when a lowercased `<script …` opening tag (without the closing `>`)
+/// carries `type="application/kusara+yaml"`. Assumes canonical generator
+/// output: no whitespace around `=` in the `type` attribute.
+fn script_type_matches(open_tag_lower: &str) -> bool {
+    let attrs = open_tag_lower
+        .strip_prefix("<script")
+        .unwrap_or(open_tag_lower);
+    for token in attrs.split_ascii_whitespace() {
+        if let Some(val) = token.strip_prefix("type=") {
+            let v = val.trim_matches('"').trim_matches('\'');
+            return v == HTML_META_TYPE;
+        }
+    }
+    false
+}
+
 fn build_edges(
     docs: &BTreeMap<DocId, Doc>,
     id_to_doc: &HashMap<DocId, DocId>,
@@ -1337,5 +1408,81 @@ mod tests {
     #[test]
     fn glob_root_double_star() {
         assert_eq!(glob_root("docs/**/*.md"), PathBuf::from("docs"));
+    }
+
+    #[test]
+    fn html_meta_happy_path() {
+        let raw = "<head>\n<script type=\"application/kusara+yaml\">\nrefs:\n  id: spec:x\n</script>\n</head>\n";
+        let HtmlMeta::Found(y) = extract_html_metadata(raw) else {
+            panic!("expected Found");
+        };
+        assert_eq!(y, "\nrefs:\n  id: spec:x\n");
+    }
+
+    #[test]
+    fn html_meta_type_among_other_attrs() {
+        let raw = "<script id=\"m\" type=\"application/kusara+yaml\" defer>\nrefs:\n  id: a\n</script>";
+        assert!(matches!(extract_html_metadata(raw), HtmlMeta::Found(_)));
+    }
+
+    #[test]
+    fn html_meta_single_quotes() {
+        let raw = "<script type='application/kusara+yaml'>\nrefs:\n  id: a\n</script>";
+        assert!(matches!(extract_html_metadata(raw), HtmlMeta::Found(_)));
+    }
+
+    #[test]
+    fn html_meta_case_insensitive() {
+        let raw = "<SCRIPT TYPE=\"application/kusara+yaml\">\nrefs:\n  id: a\n</SCRIPT>";
+        let HtmlMeta::Found(y) = extract_html_metadata(raw) else {
+            panic!("expected Found");
+        };
+        assert_eq!(y, "\nrefs:\n  id: a\n");
+    }
+
+    #[test]
+    fn html_meta_absent_returns_none() {
+        let raw = "<html><body>no metadata here</body></html>";
+        assert!(matches!(extract_html_metadata(raw), HtmlMeta::None));
+    }
+
+    #[test]
+    fn html_meta_unterminated_returns_unterminated() {
+        let raw = "<head>\n<script type=\"application/kusara+yaml\">\nrefs:\n  id: a\n</head>\n";
+        assert!(matches!(
+            extract_html_metadata(raw),
+            HtmlMeta::Unterminated
+        ));
+    }
+
+    #[test]
+    fn html_meta_first_block_wins() {
+        let raw = concat!(
+            "<script type=\"application/kusara+yaml\">\nfirst\n</script>",
+            "<script type=\"application/kusara+yaml\">\nsecond\n</script>",
+        );
+        let HtmlMeta::Found(y) = extract_html_metadata(raw) else {
+            panic!("expected Found");
+        };
+        assert_eq!(y, "\nfirst\n");
+    }
+
+    #[test]
+    fn html_meta_skips_non_matching_script_type() {
+        let raw = concat!(
+            "<script type=\"text/javascript\">var x = 1;</script>",
+            "<script type=\"application/kusara+yaml\">\nrefs:\n  id: a\n</script>",
+        );
+        let HtmlMeta::Found(y) = extract_html_metadata(raw) else {
+            panic!("expected Found");
+        };
+        assert_eq!(y, "\nrefs:\n  id: a\n");
+    }
+
+    #[test]
+    fn html_meta_tag_boundary_not_fooled_by_prefix() {
+        // `<scriptx` must not be treated as `<script`.
+        let raw = "<scriptx type=\"application/kusara+yaml\">nope</scriptx>";
+        assert!(matches!(extract_html_metadata(raw), HtmlMeta::None));
     }
 }
