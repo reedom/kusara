@@ -167,6 +167,38 @@ fn html_and_markdown_specs_share_one_graph() {
 }
 
 #[test]
+fn validate_malformed_html_metadata_reports_error() {
+    let dir = fixture(HTML_KINDS_MD);
+    // Opening marker tag but no closing </script>.
+    write(
+        dir.path(),
+        "docs/specs/foo.html",
+        "<head>\n<script type=\"application/kusara+yaml\">\nrefs:\n  id: spec:foo\n  kind: spec\n</head>\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("missing closing `</script>`"));
+}
+
+#[test]
+fn validate_strict_glob_coverage_html() {
+    let dir = fixture(HTML_KINDS_MD);
+    // Matched by the glob but carries no metadata block at all.
+    write(
+        dir.path(),
+        "docs/specs/foo.html",
+        "<html><body>no metadata</body></html>\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("has no `refs:` block"));
+}
+
+#[test]
 fn validate_dangling_reference() {
     let dir = fixture(MIN_KINDS_MD);
     write(
