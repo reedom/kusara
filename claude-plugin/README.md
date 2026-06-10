@@ -49,7 +49,7 @@ Both ship with a `references/` directory carrying verbatim copies of the kusara 
 
 - `kusara` binary on `$PATH`. Easiest: run `/kusara:setup` once. Manual: `cargo install --path .` from the repo root.
 - Rust toolchain (`cargo`) for building from source. Install via [rustup](https://rustup.rs).
-- Project repo carrying `${KUSARA_DOC_ROOT}/kinds.md` (default `docs/kinds.md`) and Markdown docs with `refs:` frontmatter.
+- Project repo carrying `${KUSARA_DOC_ROOT}/kinds.md` (default `docs/kinds.md`) and Markdown docs with `refs:` frontmatter (HTML docs carry the same YAML in a `<script type="application/kusara+yaml">` data block).
 
 ## Typical loop
 

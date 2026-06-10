@@ -1,6 +1,6 @@
 ---
 name: refs-schema
-description: Authoritative schema for the kusara `refs:` YAML frontmatter block. Use whenever editing, authoring, validating, or interpreting `refs:` frontmatter in Markdown docs scanned by kusara — including fields like `id`, `kind`, `implements`, `depends_on`, `related`, `provides`, `modules`, `generated`, `indexes_kind`. Also use when answering questions about kusara cross-reference semantics or relation strength (hard vs soft).
+description: Authoritative schema for the kusara `refs:` YAML metadata block. Use whenever editing, authoring, validating, or interpreting `refs:` metadata in Markdown or HTML docs scanned by kusara — frontmatter in Markdown, a `<script type="application/kusara+yaml">` data block in HTML — including fields like `id`, `kind`, `implements`, `depends_on`, `related`, `provides`, `modules`, `generated`, `indexes_kind`. Also use when answering questions about kusara cross-reference semantics or relation strength (hard vs soft).
 ---
 
 # kusara `refs:` frontmatter schema
@@ -33,6 +33,29 @@ refs:
 ```
 
 All list fields default to empty.
+
+## HTML documents
+
+kusara also scans `.html` / `.htm` files. HTML has no frontmatter, so the `refs:`
+block lives in an inert data block — a `<script>` element whose `type` is
+`application/kusara+yaml` — carrying the **same** YAML, top-level `refs:` key
+included:
+
+```html
+<head>
+<script type="application/kusara+yaml">
+refs:
+  id: spec:auth
+  kind: spec
+  implements: [req:auth:1]
+</script>
+</head>
+```
+
+The first matching block anywhere in the file wins (`<head>` placement is
+convention). The YAML must start at column 0 inside the script. HTML files opt
+into a kind via `path_globs` exactly like Markdown; all other behaviour is
+identical. See `references/refs.md` for the full convention.
 
 ## Relation semantics
 
