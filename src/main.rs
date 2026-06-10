@@ -415,6 +415,13 @@ fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
 // Scan & graph build
 // ---------------------------------------------------------------------------
 
+/// Source syntax kusara knows how to read metadata from.
+#[derive(Clone, Copy)]
+enum DocFormat {
+    Markdown,
+    Html,
+}
+
 fn build_graph(
     root: &Path,
     doc_root: &Path,
@@ -454,9 +461,11 @@ fn build_graph(
                 continue;
             }
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("md") {
-                continue;
-            }
+            let format = match path.extension().and_then(|s| s.to_str()) {
+                Some("md") => DocFormat::Markdown,
+                Some("html") | Some("htm") => DocFormat::Html,
+                _ => continue,
+            };
             let Ok(rel_path) = path.strip_prefix(root) else {
                 errors.push(format!(
                     "path {} escaped scan root {}",
@@ -477,17 +486,30 @@ fn build_graph(
                     continue;
                 }
             };
-            let yaml = match extract_frontmatter(&raw) {
-                Some(y) => y,
-                None => {
-                    if raw.starts_with("---\n") || raw.starts_with("---\r\n") {
+            let yaml = match format {
+                DocFormat::Markdown => match extract_frontmatter(&raw) {
+                    Some(y) => y,
+                    None => {
+                        if raw.starts_with("---\n") || raw.starts_with("---\r\n") {
+                            errors.push(format!(
+                                "{}: malformed front matter (missing closing `---`)",
+                                rel.display()
+                            ));
+                        }
+                        continue;
+                    }
+                },
+                DocFormat::Html => match extract_html_metadata(&raw) {
+                    HtmlMeta::Found(y) => y,
+                    HtmlMeta::None => continue,
+                    HtmlMeta::Unterminated => {
                         errors.push(format!(
-                            "{}: malformed front matter (missing closing `---`)",
+                            "{}: malformed metadata block (missing closing `</script>`)",
                             rel.display()
                         ));
+                        continue;
                     }
-                    continue;
-                }
+                },
             };
             let fm: FrontMatter = match serde_yaml_ng::from_str(yaml) {
                 Ok(v) => v,
