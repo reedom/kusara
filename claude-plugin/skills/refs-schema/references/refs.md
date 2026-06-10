@@ -35,6 +35,35 @@ All list fields default to empty.
 
 `generated:` and `indexes_kind:` are written by `kusara index` on generated INDEX files (kind `index`). Do not set them by hand on regular docs.
 
+## HTML documents
+
+kusara also scans `.html` / `.htm` files. Because HTML has no frontmatter, the
+`refs:` block lives in an embedded data block: a `<script>` element whose `type`
+is `application/kusara+yaml`. Its body is the **same** YAML used in Markdown
+frontmatter (top-level `refs:` key included).
+
+```html
+<head>
+<script type="application/kusara+yaml">
+refs:
+  id: spec:auth
+  kind: spec
+  implements: [req:auth:1]
+  modules: [src/auth/]
+</script>
+</head>
+```
+
+- A non-JavaScript script `type` is an inert data block: browsers never render or
+  execute it.
+- kusara scans the whole file for the first matching block (the `<head>`
+  placement is convention, not required); the first block wins.
+- The YAML should start at column 0 inside the script — the generator is
+  responsible for emitting it un-indented.
+- Opt HTML files into a kind exactly like Markdown, via `path_globs` (e.g.
+  `docs/specs/*.html`). All other behaviour (`modules`, `provides`, indexes, map,
+  validation) is identical.
+
 ## Relation semantics
 
 | Field | Meaning | Direction | Strength |

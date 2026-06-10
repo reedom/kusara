@@ -72,6 +72,10 @@ refs:
 
 Required: `id`, `kind`. Optional: `title`, `spec`, `provides`, `implements`, `depends_on`, `related`, `modules`. Schema reference: [`docs/refs.md`](docs/refs.md).
 
+kusara also scans `.html` / `.htm` docs: the `refs:` block lives in a
+`<script type="application/kusara+yaml">` data block instead of frontmatter. See
+[docs/refs.md](docs/refs.md#html-documents).
+
 ### 3. Run
 
 ```sh
