@@ -1,6 +1,6 @@
 ---
 name: kinds-manifest
-description: Authoritative knowledge of the kusara kinds manifest format at `${KUSARA_DOC_ROOT}/kinds.md` (default `docs/kinds.md`). Use when answering which kinds exist, what `path_globs` cover a doc, what `id_pattern` to follow for a new id, whether a kind generates an INDEX, or when picking the right `kind:` for a Markdown file. Also use when interpreting `declared_via: provides` or `declared_via: generated` semantics, or when adding a new kind to a project.
+description: Authoritative knowledge of the kusara kinds manifest format at `${KUSARA_DOC_ROOT}/kinds.md` (default `docs/kinds.md`). Use when answering which kinds exist, what `path_globs` cover a doc, what `id_pattern` to follow for a new id, whether a kind generates an INDEX, or when picking the right `kind:` for a Markdown or HTML file. Also use when interpreting `declared_via: provides` or `declared_via: generated` semantics, or when adding a new kind to a project.
 ---
 
 # kusara kinds manifest
@@ -33,7 +33,7 @@ The YAML block under `## Manifest` is the source of truth.
 ## Field semantics
 
 - **`name`** — the string used as `kind:` in frontmatter and as id prefix (e.g. `fr` → `id: fr:01-foo`).
-- **`path_globs`** — repo-relative literal globs. Not prefixed by `KUSARA_DOC_ROOT`. Omit when the kind is declared only via `provides:`.
+- **`path_globs`** — repo-relative literal globs. Not prefixed by `KUSARA_DOC_ROOT`. Omit when the kind is declared only via `provides:`. Globs may cover `.html` / `.htm` files as well as Markdown (e.g. `docs/specs/*.html`); HTML docs carry their `refs:` block in a `<script type="application/kusara+yaml">` data block (see the `refs-schema` skill).
 - **`declared_via: provides`** — kind has no files of its own; ids appear inside another doc's `provides:` list. Typical: `req`.
 - **`declared_via: generated`** — kind is written only by `kusara index`. Reserved: `index`.
 - **`id_pattern`** — informational only. The validator does not enforce it; it enforces uniqueness alone.

@@ -7,6 +7,10 @@ use tempfile::TempDir;
 
 const MIN_KINDS_MD: &str = "# kinds\n\n```yaml\nkinds:\n  - name: spec\n    path_globs: [\"docs/specs/*.md\"]\n    id_pattern: \"spec:{slug}\"\n    index:\n      output: docs/specs/index.md\n  - name: ref\n    path_globs: [\"docs/ref/[a-z]*.md\"]\n    id_pattern: \"ref:{slug}\"\n  - name: req\n    declared_via: provides\n    id_pattern: \"req:{spec}:{n}\"\n  - name: index\n    declared_via: generated\n    id_pattern: \"index:{kind}\"\n```\n";
 
+const HTML_KINDS_MD: &str = "# kinds\n\n```yaml\nkinds:\n  - name: spec\n    path_globs: [\"docs/specs/*.html\"]\n    id_pattern: \"spec:{slug}\"\n  - name: req\n    declared_via: provides\n    id_pattern: \"req:{spec}:{n}\"\n  - name: index\n    declared_via: generated\n    id_pattern: \"index:{kind}\"\n```\n";
+
+const MIXED_KINDS_MD: &str = "# kinds\n\n```yaml\nkinds:\n  - name: spec\n    path_globs: [\"docs/specs/*.md\", \"docs/specs/*.html\"]\n    id_pattern: \"spec:{slug}\"\n  - name: req\n    declared_via: provides\n    id_pattern: \"req:{spec}:{n}\"\n  - name: index\n    declared_via: generated\n    id_pattern: \"index:{kind}\"\n```\n";
+
 fn fixture(kinds_md: &str) -> TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     write(dir.path(), "docs/kinds.md", kinds_md);
@@ -106,6 +110,109 @@ fn validate_clean_repo() {
         .assert()
         .success()
         .stdout(predicate::str::contains("OK (1 docs)"));
+}
+
+#[test]
+fn validate_clean_html_spec() {
+    let dir = fixture(HTML_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/foo.html",
+        "<head>\n<script type=\"application/kusara+yaml\">\nrefs:\n  id: spec:foo\n  kind: spec\n  title: Foo\n</script>\n</head>\n<body>Foo</body>\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("OK (1 docs)"));
+}
+
+#[test]
+fn html_spec_shows_metadata() {
+    let dir = fixture(HTML_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/foo.html",
+        "<head>\n<script type=\"application/kusara+yaml\">\nrefs:\n  id: spec:foo\n  kind: spec\n  title: Foo\n</script>\n</head>\n",
+    );
+    ks(dir.path())
+        .args(["show", "spec:foo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("id:       spec:foo"))
+        .stdout(predicate::str::contains("kind:     spec"))
+        .stdout(predicate::str::contains("path:     docs/specs/foo.html"));
+}
+
+#[test]
+fn html_and_markdown_specs_share_one_graph() {
+    let dir = fixture(MIXED_KINDS_MD);
+    // a.html depends on b.md — a cross-format edge.
+    write(
+        dir.path(),
+        "docs/specs/a.html",
+        "<script type=\"application/kusara+yaml\">\nrefs:\n  id: spec:a\n  kind: spec\n  depends_on:\n    - spec:b\n</script>\n",
+    );
+    write(
+        dir.path(),
+        "docs/specs/b.md",
+        "---\nrefs:\n  id: spec:b\n  kind: spec\n---\n",
+    );
+    ks(dir.path()).arg("validate").assert().success();
+    ks(dir.path())
+        .args(["impact", "spec:b"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("spec:a"));
+}
+
+#[test]
+fn validate_malformed_html_metadata_reports_error() {
+    let dir = fixture(HTML_KINDS_MD);
+    // Opening marker tag but no closing </script>.
+    write(
+        dir.path(),
+        "docs/specs/foo.html",
+        "<head>\n<script type=\"application/kusara+yaml\">\nrefs:\n  id: spec:foo\n  kind: spec\n</head>\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("missing closing `</script>`"));
+}
+
+#[test]
+fn validate_strict_glob_coverage_html() {
+    let dir = fixture(HTML_KINDS_MD);
+    // Matched by the glob but carries no metadata block at all.
+    write(
+        dir.path(),
+        "docs/specs/foo.html",
+        "<html><body>no metadata</body></html>\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("has no `refs:` block"));
+}
+
+#[test]
+fn validate_html_invalid_yaml_reports_parse_error() {
+    let dir = fixture(HTML_KINDS_MD);
+    // Well-formed block, but the YAML body is invalid (unclosed flow sequence).
+    // Must surface the same parse error as malformed Markdown front matter.
+    write(
+        dir.path(),
+        "docs/specs/foo.html",
+        "<script type=\"application/kusara+yaml\">\nrefs:\n  id: [unclosed\n</script>\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("front matter parse error"));
 }
 
 #[test]
