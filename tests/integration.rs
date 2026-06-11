@@ -70,9 +70,7 @@ fn manifest_duplicate_kind_fails() {
 
 #[test]
 fn manifest_missing_globs_and_declared_via_fails() {
-    let dir = fixture(
-        "```yaml\nkinds:\n  - name: orphan\n    id_pattern: \"orphan\"\n```\n",
-    );
+    let dir = fixture("```yaml\nkinds:\n  - name: orphan\n    id_pattern: \"orphan\"\n```\n");
     ks(dir.path())
         .arg("validate")
         .assert()
@@ -87,10 +85,7 @@ fn manifest_unknown_declared_via_fails() {
     let dir = fixture(
         "```yaml\nkinds:\n  - name: bogus\n    declared_via: providess\n    id_pattern: \"bogus\"\n```\n",
     );
-    ks(dir.path())
-        .arg("validate")
-        .assert()
-        .failure();
+    ks(dir.path()).arg("validate").assert().failure();
 }
 
 // ---------------------------------------------------------------------------
@@ -284,11 +279,7 @@ fn validate_missing_module_path() {
 #[test]
 fn validate_strict_glob_coverage() {
     let dir = fixture(MIN_KINDS_MD);
-    write(
-        dir.path(),
-        "docs/specs/foo.md",
-        "# no front matter\n",
-    );
+    write(dir.path(), "docs/specs/foo.md", "# no front matter\n");
     ks(dir.path())
         .arg("validate")
         .assert()
@@ -423,7 +414,10 @@ fn impact_depth_one_stops_at_first_layer() {
         .success();
     let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
     assert!(out.contains("spec:b"), "expected spec:b in:\n{out}");
-    assert!(!out.contains("spec:a"), "expected spec:a missing in:\n{out}");
+    assert!(
+        !out.contains("spec:a"),
+        "expected spec:a missing in:\n{out}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -513,10 +507,7 @@ fn touched_no_closure_skips_indirect() {
 #[test]
 fn index_map_writes_three_artifacts() {
     let dir = dir_with_chain();
-    ks(dir.path())
-        .args(["index", "map"])
-        .assert()
-        .success();
+    ks(dir.path()).args(["index", "map"]).assert().success();
     assert!(dir.path().join("docs/map.md").exists());
     assert!(dir.path().join("docs/ai/graph.json").exists());
     assert!(dir.path().join("docs/ai/modules.md").exists());

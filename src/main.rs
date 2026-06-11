@@ -422,11 +422,7 @@ enum DocFormat {
     Html,
 }
 
-fn build_graph(
-    root: &Path,
-    doc_root: &Path,
-    manifest: &Manifest,
-) -> Result<(Graph, Vec<String>)> {
+fn build_graph(root: &Path, doc_root: &Path, manifest: &Manifest) -> Result<(Graph, Vec<String>)> {
     let mut docs: BTreeMap<DocId, Doc> = BTreeMap::new();
     let mut id_to_doc: HashMap<DocId, DocId> = HashMap::new();
     let mut errors: Vec<String> = Vec::new();
@@ -585,7 +581,9 @@ fn build_graph(
                     errors.push(format!(
                         "duplicate id `{}` provided by both {} and {}",
                         pid,
-                        docs.get(owner).map(|d| d.rel_path.display().to_string()).unwrap_or_default(),
+                        docs.get(owner)
+                            .map(|d| d.rel_path.display().to_string())
+                            .unwrap_or_default(),
                         rel.display()
                     ));
                     conflict = true;
@@ -768,8 +766,14 @@ fn build_edges(
                 ));
                 continue;
             }
-            forward.entry(doc.id.clone()).or_default().insert(target.clone());
-            reverse.entry(target.clone()).or_default().insert(doc.id.clone());
+            forward
+                .entry(doc.id.clone())
+                .or_default()
+                .insert(target.clone());
+            reverse
+                .entry(target.clone())
+                .or_default()
+                .insert(doc.id.clone());
         }
     }
     (forward, reverse, related_forward, related_reverse)
@@ -801,11 +805,7 @@ fn cmd_validate(
     }
 
     // Every file matched by a kind's `path_globs` must have a `refs:` block.
-    let in_graph: BTreeSet<PathBuf> = graph
-        .docs
-        .values()
-        .map(|d| d.rel_path.clone())
-        .collect();
+    let in_graph: BTreeSet<PathBuf> = graph.docs.values().map(|d| d.rel_path.clone()).collect();
     for kind in manifest.kinds.values() {
         for pat in &kind.path_globs {
             let absolute = format!("{}/{}", root.display(), pat);
@@ -895,8 +895,7 @@ fn cmd_traverse(
     println!();
 
     let mut seen: BTreeSet<DocId> = seeds.iter().cloned().collect();
-    let mut frontier: VecDeque<(DocId, u32)> =
-        seeds.iter().map(|id| (id.clone(), 0)).collect();
+    let mut frontier: VecDeque<(DocId, u32)> = seeds.iter().map(|id| (id.clone(), 0)).collect();
     let mut layered: BTreeMap<u32, BTreeSet<DocId>> = BTreeMap::new();
 
     while let Some((cur, d)) = frontier.pop_front() {
@@ -1005,7 +1004,11 @@ fn cmd_touched(
         } else {
             root.join(f)
         };
-        let rel = abs.strip_prefix(root).unwrap_or(f).to_string_lossy().to_string();
+        let rel = abs
+            .strip_prefix(root)
+            .unwrap_or(f)
+            .to_string_lossy()
+            .to_string();
         rel_files.push(normalize_separators(&rel));
     }
 
@@ -1099,8 +1102,7 @@ fn write_map(root: &Path, doc_root: &Path, graph: &Graph) -> Result<ExitCode> {
     let modules_path = root.join(doc_root).join("ai/modules.md");
 
     if let Some(parent) = json_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
 
     // 1. Human-readable map.md
@@ -1155,8 +1157,7 @@ fn write_map(root: &Path, doc_root: &Path, graph: &Graph) -> Result<ExitCode> {
         let cell: Vec<String> = ids.iter().map(|i| format!("`{i}`")).collect();
         mm.push_str(&format!("| `{}` | {} |\n", m, cell.join(", ")));
     }
-    fs::write(&modules_path, mm)
-        .with_context(|| format!("write {}", modules_path.display()))?;
+    fs::write(&modules_path, mm).with_context(|| format!("write {}", modules_path.display()))?;
     println!("wrote {}", modules_path.display());
 
     Ok(ExitCode::SUCCESS)
@@ -1286,8 +1287,7 @@ fn write_per_kind_indexes(root: &Path, manifest: &Manifest, graph: &Graph) -> Re
 
         let target = root.join(&idx.output);
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
         fs::write(&target, out).with_context(|| format!("write {}", target.display()))?;
         println!("wrote {}", target.display());
@@ -1306,8 +1306,16 @@ fn emit_kind_table(out: &mut String, docs: &[&Doc]) {
             "| `{}` | {} | {} | {} |\n",
             d.id,
             d.title.clone().unwrap_or_default(),
-            d.implements.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", "),
-            d.depends_on.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", "),
+            d.implements
+                .iter()
+                .map(|s| format!("`{s}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            d.depends_on
+                .iter()
+                .map(|s| format!("`{s}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
         ));
     }
     out.push('\n');
@@ -1411,12 +1419,18 @@ mod tests {
 
     #[test]
     fn glob_root_literal_path() {
-        assert_eq!(glob_root(".kiro/steering/roadmap.md"), PathBuf::from(".kiro/steering"));
+        assert_eq!(
+            glob_root(".kiro/steering/roadmap.md"),
+            PathBuf::from(".kiro/steering")
+        );
     }
 
     #[test]
     fn glob_root_with_meta_in_middle() {
-        assert_eq!(glob_root(".kiro/specs/*/brief.md"), PathBuf::from(".kiro/specs"));
+        assert_eq!(
+            glob_root(".kiro/specs/*/brief.md"),
+            PathBuf::from(".kiro/specs")
+        );
         assert_eq!(glob_root("docs/fr/[0-9]*.md"), PathBuf::from("docs/fr"));
         assert_eq!(glob_root("crates/*/README.md"), PathBuf::from("crates"));
     }
@@ -1443,7 +1457,8 @@ mod tests {
 
     #[test]
     fn html_meta_type_among_other_attrs() {
-        let raw = "<script id=\"m\" type=\"application/kusara+yaml\" defer>\nrefs:\n  id: a\n</script>";
+        let raw =
+            "<script id=\"m\" type=\"application/kusara+yaml\" defer>\nrefs:\n  id: a\n</script>";
         assert!(matches!(extract_html_metadata(raw), HtmlMeta::Found(_)));
     }
 
@@ -1471,10 +1486,7 @@ mod tests {
     #[test]
     fn html_meta_unterminated_returns_unterminated() {
         let raw = "<head>\n<script type=\"application/kusara+yaml\">\nrefs:\n  id: a\n</head>\n";
-        assert!(matches!(
-            extract_html_metadata(raw),
-            HtmlMeta::Unterminated
-        ));
+        assert!(matches!(extract_html_metadata(raw), HtmlMeta::Unterminated));
     }
 
     #[test]
