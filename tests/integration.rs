@@ -614,7 +614,9 @@ fn okf_fields_surface_in_show() {
         .args(["show", "spec:auth"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("description: Authentication design"))
+        .stdout(predicate::str::contains(
+            "description: Authentication design",
+        ))
         .stdout(predicate::str::contains("tags:     auth, security"));
 }
 
