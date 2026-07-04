@@ -541,6 +541,26 @@ fn index_then_validate_roundtrips() {
     ks(dir.path()).arg("validate").assert().success();
 }
 
+#[test]
+fn generated_index_uses_okf_shape() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/a.md",
+        "---\ntype: spec\nkusara:\n  id: spec:a\n---\n# a\n",
+    );
+    ks(dir.path()).arg("index").assert().success();
+    let idx = fs::read_to_string(dir.path().join("docs/specs/index.md")).unwrap();
+    assert!(idx.contains("type: index"), "index frontmatter: {idx}");
+    assert!(idx.contains("kusara:"), "index frontmatter: {idx}");
+    assert!(
+        !idx.contains("refs:"),
+        "index must not use legacy shape: {idx}"
+    );
+    // The generated index must itself validate (reader round-trips its output).
+    ks(dir.path()).arg("validate").assert().success();
+}
+
 // ---------------------------------------------------------------------------
 // Env override
 // ---------------------------------------------------------------------------
