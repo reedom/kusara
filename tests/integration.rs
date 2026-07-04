@@ -134,9 +134,9 @@ fn html_spec_shows_metadata() {
         .args(["show", "spec:foo"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("id:       spec:foo"))
-        .stdout(predicate::str::contains("kind:     spec"))
-        .stdout(predicate::str::contains("path:     docs/specs/foo.html"));
+        .stdout(predicate::str::contains("id:          spec:foo"))
+        .stdout(predicate::str::contains("kind:        spec"))
+        .stdout(predicate::str::contains("path:        docs/specs/foo.html"));
 }
 
 #[test]
@@ -431,8 +431,8 @@ fn show_prints_doc_metadata() {
         .args(["show", "spec:b"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("id:       spec:b"))
-        .stdout(predicate::str::contains("kind:     spec"));
+        .stdout(predicate::str::contains("id:          spec:b"))
+        .stdout(predicate::str::contains("kind:        spec"));
 }
 
 #[test]
@@ -617,7 +617,7 @@ fn okf_fields_surface_in_show() {
         .stdout(predicate::str::contains(
             "description: Authentication design",
         ))
-        .stdout(predicate::str::contains("tags:     auth, security"));
+        .stdout(predicate::str::contains("tags:        auth, security"));
 }
 
 #[test]
@@ -646,7 +646,7 @@ fn okf_shape_resolves_refs_like_legacy() {
         .args(["show", "spec:down"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("kind:     spec"))
+        .stdout(predicate::str::contains("kind:        spec"))
         .stdout(predicate::str::contains("depends_on:"));
 }
 
@@ -700,6 +700,77 @@ fn okf_missing_id_rejected() {
         "---\ntype: spec\nkusara:\n  implements: [spec:up]\n---\n# x\n",
     );
     ks(dir.path()).arg("validate").assert().failure();
+}
+
+#[test]
+fn type_without_kusara_is_skipped() {
+    let dir = fixture(MIN_KINDS_MD);
+    // Placed directly under docs/ (not under docs/specs/, which is covered by
+    // the `spec` kind's `path_globs` and would trip the separate "matches a
+    // kind glob but has no `refs:` block" strict-coverage check in
+    // `cmd_validate` -- a different, unrelated invariant). This location only
+    // exercises `FrontMatter::normalize`'s `(None, None) => Ok(None)` skip path.
+    write(dir.path(), "docs/x.md", "---\ntype: spec\n---\n# x\n");
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("OK (0 docs)"));
+    ks(dir.path())
+        .args(["show", "spec:x"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown id"));
+}
+
+#[test]
+fn kusara_without_type_is_error() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/x.md",
+        "---\nkusara:\n  id: spec:x\n---\n# x\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("type"));
+}
+
+#[test]
+fn okf_fields_in_graph_json() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/specs/auth.md", OKF_DOC); // has description + tags
+    write(
+        dir.path(),
+        "docs/specs/plain.md",
+        "---\ntype: spec\nkusara:\n  id: spec:plain\n---\n# Plain\n",
+    );
+    ks(dir.path()).args(["index", "map"]).assert().success();
+    let json_str = fs::read_to_string(dir.path().join("docs/ai/graph.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid json");
+    let docs = json["docs"].as_array().expect("docs array");
+
+    let auth = docs
+        .iter()
+        .find(|d| d["id"] == "spec:auth")
+        .expect("spec:auth present");
+    assert_eq!(auth["description"], "Authentication design");
+    assert_eq!(auth["tags"], serde_json::json!(["auth", "security"]));
+
+    let plain = docs
+        .iter()
+        .find(|d| d["id"] == "spec:plain")
+        .expect("spec:plain present");
+    assert!(
+        plain.get("description").is_none(),
+        "plain doc must omit description: {plain}"
+    );
+    assert!(
+        plain.get("tags").is_none(),
+        "plain doc must omit tags: {plain}"
+    );
 }
 
 #[test]

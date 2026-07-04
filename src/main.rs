@@ -289,6 +289,10 @@ struct FrontMatter {
 
 /// The kusara graph layer in the OKF shape. Mirrors `RefsBlock` minus the
 /// hoisted `kind`/`title`. Unknown keys are rejected: this is our namespace.
+///
+/// NOTE: the graph field list is duplicated across three places that must
+/// stay in sync when a field is added/removed: this struct (read), `RefsBlock`
+/// (read, legacy shape), and `KusaraOut` in `emit_okf_frontmatter` (write).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct KusaraBlock {
@@ -321,6 +325,9 @@ struct OkfMeta {
     timestamp: Option<String>,
 }
 
+/// NOTE: mirrors `KusaraBlock`'s graph fields (plus the legacy-only `kind`/
+/// `title`). Keep in sync with `KusaraBlock` (read) and `KusaraOut` in
+/// `emit_okf_frontmatter` (write) when a graph field is added.
 #[derive(Debug, Deserialize)]
 struct RefsBlock {
     id: DocId,
@@ -347,28 +354,38 @@ struct RefsBlock {
 }
 
 impl FrontMatter {
-    /// Normalize either shape into `(RefsBlock, OkfMeta)`.
+    /// Normalize either shape into `(RefsBlock, OkfMeta, is_legacy)`.
     /// `Ok(None)` = the file carries no kusara metadata (skip it).
     /// `Err` = ambiguous shape or a missing required field.
+    ///
+    /// The presence of the `kusara:` block -- not `type:` -- is the trigger
+    /// for "this is an OKF kusara doc". A bare top-level `type:` with no
+    /// `kusara:` block is a non-kusara doc and is silently skipped (per
+    /// product decision); `refs:` plus a stray top-level `type:` is legacy,
+    /// not ambiguous (only `refs:` + `kusara:` together are ambiguous).
     fn normalize(self) -> Result<Option<(RefsBlock, OkfMeta, bool)>, String> {
-        let has_okf = self.typ.is_some() || self.kusara.is_some();
-        match (self.refs, has_okf) {
-            (Some(_), true) => {
-                Err("ambiguous front matter: both `refs:` and OKF `type:`/`kusara:` present".into())
+        let FrontMatter {
+            refs,
+            typ,
+            title,
+            description,
+            resource,
+            tags,
+            timestamp,
+            kusara,
+        } = self;
+        match (refs, kusara) {
+            (Some(_), Some(_)) => {
+                Err("ambiguous front matter: both `refs:` and `kusara:` present".into())
             }
-            (Some(refs), false) => Ok(Some((refs, OkfMeta::default(), true))),
-            (None, false) => Ok(None),
-            (None, true) => {
-                let kind = self
-                    .typ
-                    .ok_or("OKF front matter missing required `type:`")?;
-                let k = self
-                    .kusara
-                    .ok_or("OKF front matter missing required `kusara:` block")?;
+            (Some(refs), None) => Ok(Some((refs, OkfMeta::default(), true))),
+            (None, Some(k)) => {
+                let kind =
+                    typ.ok_or("OKF front matter has `kusara:` but is missing required `type:`")?;
                 let refs = RefsBlock {
                     id: k.id,
                     kind,
-                    title: self.title,
+                    title,
                     spec: k.spec,
                     provides: k.provides,
                     implements: k.implements,
@@ -379,13 +396,14 @@ impl FrontMatter {
                     indexes_kind: k.indexes_kind,
                 };
                 let okf = OkfMeta {
-                    description: self.description,
-                    resource: self.resource,
-                    tags: self.tags,
-                    timestamp: self.timestamp,
+                    description,
+                    resource,
+                    tags,
+                    timestamp,
                 };
                 Ok(Some((refs, okf, false)))
             }
+            (None, None) => Ok(None),
         }
     }
 }
@@ -491,7 +509,8 @@ fn real_main() -> Result<ExitCode> {
 
 fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
     let manifest = Manifest::load(root, doc_root)?;
-    let (graph, parse_errors) = build_graph(root, doc_root, &manifest)?;
+    let warn_deprecated = !matches!(cli.cmd, Cmd::Migrate { .. });
+    let (graph, parse_errors) = build_graph(root, doc_root, &manifest, warn_deprecated)?;
     if !matches!(cli.cmd, Cmd::Validate) && !parse_errors.is_empty() {
         eprintln!(
             "warning: {} parse error(s); run `kusara validate` for details",
@@ -529,7 +548,12 @@ enum DocFormat {
     Html,
 }
 
-fn build_graph(root: &Path, doc_root: &Path, manifest: &Manifest) -> Result<(Graph, Vec<String>)> {
+fn build_graph(
+    root: &Path,
+    doc_root: &Path,
+    manifest: &Manifest,
+    warn_deprecated: bool,
+) -> Result<(Graph, Vec<String>)> {
     let mut docs: BTreeMap<DocId, Doc> = BTreeMap::new();
     let mut id_to_doc: HashMap<DocId, DocId> = HashMap::new();
     let mut errors: Vec<String> = Vec::new();
@@ -629,7 +653,7 @@ fn build_graph(root: &Path, doc_root: &Path, manifest: &Manifest) -> Result<(Gra
                     continue;
                 }
             };
-            if is_legacy {
+            if is_legacy && warn_deprecated {
                 eprintln!(
                     "warning: {}: legacy `refs:` front matter is deprecated; run `kusara migrate`",
                     rel.display()
@@ -1064,11 +1088,13 @@ fn cmd_show(graph: &Graph, id: &str) -> Result<ExitCode> {
         .get(doc_id)
         .ok_or_else(|| anyhow!("internal: doc `{doc_id}` missing"))?;
 
-    println!("id:       {}", doc.id);
+    // All labels below pad to the same column (13 chars: enough to fit the
+    // widest label, `description:`, plus one space) so values line up.
+    println!("id:          {}", doc.id);
     if doc.id.as_str() != id {
-        println!("queried:  {id}  (provided by {})", doc.id);
+        println!("queried:     {id}  (provided by {})", doc.id);
     }
-    println!("kind:     {}", doc.kind());
+    println!("kind:        {}", doc.kind());
     if doc.generated() {
         println!("generated: true");
         if let Some(k) = doc.indexes_kind() {
@@ -1076,24 +1102,24 @@ fn cmd_show(graph: &Graph, id: &str) -> Result<ExitCode> {
         }
     }
     if let Some(s) = &doc.spec {
-        println!("spec:     {s}");
+        println!("spec:        {s}");
     }
     if let Some(t) = &doc.title {
-        println!("title:    {t}");
+        println!("title:       {t}");
     }
     if let Some(d) = &doc.description {
         println!("description: {d}");
     }
     if let Some(r) = &doc.resource {
-        println!("resource: {r}");
+        println!("resource:    {r}");
     }
     if !doc.tags.is_empty() {
-        println!("tags:     {}", doc.tags.join(", "));
+        println!("tags:        {}", doc.tags.join(", "));
     }
     if let Some(ts) = &doc.timestamp {
-        println!("timestamp: {ts}");
+        println!("timestamp:   {ts}");
     }
-    println!("path:     {}", doc.rel_path.display());
+    println!("path:        {}", doc.rel_path.display());
 
     print_list("provides:", &doc.provides);
     print_list("implements:", &doc.implements);
@@ -1499,6 +1525,8 @@ fn cmd_list(graph: &Graph) -> Result<ExitCode> {
 /// Serialize the OKF-shaped front matter body (between the `---` fences) for a
 /// normalized doc. Deterministic field order. Ends with a trailing newline.
 fn emit_okf_frontmatter(rb: &RefsBlock, okf: &OkfMeta) -> String {
+    // NOTE: mirrors the graph fields of `KusaraBlock`/`RefsBlock` (read side).
+    // Keep the three field lists in sync when a graph field is added.
     #[derive(serde::Serialize)]
     struct KusaraOut {
         id: DocId,
@@ -1622,6 +1650,13 @@ fn cmd_migrate(
                 Ok(v) => v,
                 Err(_) => continue,
             };
+            if fm.refs.is_some() && fm.kusara.is_some() {
+                eprintln!(
+                    "warning: {}: ambiguous front matter (both refs: and kusara:), not migrated",
+                    rel_path.display()
+                );
+                continue;
+            }
             // Only legacy docs need migration.
             let Some(refs_block) = fm.refs else {
                 continue;
@@ -1631,8 +1666,9 @@ fn cmd_migrate(
             let new_yaml = match format {
                 // Markdown yaml has no surrounding newlines inside the fences;
                 // `body` already ends with `\n`, matching `extract_frontmatter`
-                // (which excludes the trailing `\n` before `---`). Trim one.
-                DocFormat::Markdown => body.trim_end_matches('\n').to_string(),
+                // (which excludes the trailing `\n` before `---`). Drop
+                // exactly the single trailing newline serde_yaml emits.
+                DocFormat::Markdown => body.strip_suffix('\n').unwrap_or(&body).to_string(),
                 // HTML script content in canonical output is newline-wrapped.
                 DocFormat::Html => format!("\n{}", body),
             };
