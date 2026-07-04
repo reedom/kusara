@@ -63,6 +63,12 @@ enum Cmd {
     },
     /// List every known ID (debug aid).
     List,
+    /// Rewrite legacy `refs:` front matter into the OKF-native shape in place.
+    Migrate {
+        /// Print which files would change without writing them.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(clap::ValueEnum, Debug, PartialEq, Eq, Clone, Copy)]
@@ -508,6 +514,7 @@ fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
         Cmd::Touched { files, no_closure } => cmd_touched(root, &graph, files, *no_closure),
         Cmd::Index { target } => cmd_index(root, doc_root, &manifest, &graph, *target),
         Cmd::List => cmd_list(&graph),
+        Cmd::Migrate { dry_run } => cmd_migrate(root, doc_root, &manifest, *dry_run),
     }
 }
 
@@ -1481,6 +1488,169 @@ fn cmd_list(graph: &Graph) -> Result<ExitCode> {
             continue;
         };
         println!("{:<40} {:<14} {}", id, doc.kind(), doc.rel_path.display());
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+// ---------------------------------------------------------------------------
+// Migrate
+// ---------------------------------------------------------------------------
+
+/// Serialize the OKF-shaped front matter body (between the `---` fences) for a
+/// normalized doc. Deterministic field order. Ends with a trailing newline.
+fn emit_okf_frontmatter(rb: &RefsBlock, okf: &OkfMeta) -> String {
+    #[derive(serde::Serialize)]
+    struct KusaraOut {
+        id: DocId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        spec: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        implements: Vec<DocId>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        depends_on: Vec<DocId>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        related: Vec<DocId>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        provides: Vec<DocId>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        modules: Vec<String>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        generated: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        indexes_kind: Option<Kind>,
+    }
+    #[derive(serde::Serialize)]
+    struct OkfOut {
+        #[serde(rename = "type")]
+        typ: Kind,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        resource: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        tags: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
+        kusara: KusaraOut,
+    }
+    let out = OkfOut {
+        typ: rb.kind.clone(),
+        title: rb.title.clone(),
+        description: okf.description.clone(),
+        resource: okf.resource.clone(),
+        tags: okf.tags.clone(),
+        timestamp: okf.timestamp.clone(),
+        kusara: KusaraOut {
+            id: rb.id.clone(),
+            spec: rb.spec.clone(),
+            implements: rb.implements.clone(),
+            depends_on: rb.depends_on.clone(),
+            related: rb.related.clone(),
+            provides: rb.provides.clone(),
+            modules: rb.modules.clone(),
+            generated: rb.generated,
+            indexes_kind: rb.indexes_kind.clone(),
+        },
+    };
+    serde_yaml_ng::to_string(&out).expect("serialize OKF front matter")
+}
+
+/// Replace `inner` (a subslice of `raw`) with `new_inner`, returning the whole
+/// string. Relies on `inner` being a borrow into `raw`.
+fn splice_subslice(raw: &str, inner: &str, new_inner: &str) -> String {
+    let off = inner.as_ptr() as usize - raw.as_ptr() as usize;
+    let mut out = String::with_capacity(raw.len() - inner.len() + new_inner.len());
+    out.push_str(&raw[..off]);
+    out.push_str(new_inner);
+    out.push_str(&raw[off + inner.len()..]);
+    out
+}
+
+fn cmd_migrate(
+    root: &Path,
+    doc_root: &Path,
+    manifest: &Manifest,
+    dry_run: bool,
+) -> Result<ExitCode> {
+    let mut changed = 0u32;
+    let scan_roots = derive_scan_roots(manifest, doc_root);
+    let mut visited: BTreeSet<PathBuf> = BTreeSet::new();
+    for rel in scan_roots {
+        let scan = root.join(&rel);
+        if fs::metadata(&scan).is_err() {
+            continue;
+        }
+        let walker = WalkDir::new(&scan).into_iter().filter_entry(|e| {
+            !e.file_name()
+                .to_str()
+                .map(|n| SKIP_DIRS.contains(&n))
+                .unwrap_or(false)
+        });
+        for entry in walker.flatten() {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let format = match path.extension().and_then(|s| s.to_str()) {
+                Some("md") => DocFormat::Markdown,
+                Some("html") | Some("htm") => DocFormat::Html,
+                _ => continue,
+            };
+            let Ok(rel_path) = path.strip_prefix(root) else {
+                continue;
+            };
+            if !visited.insert(rel_path.to_path_buf()) {
+                continue;
+            }
+            let raw = match fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let yaml = match format {
+                DocFormat::Markdown => match extract_frontmatter(&raw) {
+                    Some(y) => y,
+                    None => continue,
+                },
+                DocFormat::Html => match extract_html_metadata(&raw) {
+                    HtmlMeta::Found(y) => y,
+                    _ => continue,
+                },
+            };
+            let fm: FrontMatter = match serde_yaml_ng::from_str(yaml) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            // Only legacy docs need migration.
+            let Some(refs_block) = fm.refs else {
+                continue;
+            };
+            let okf = OkfMeta::default();
+            let body = emit_okf_frontmatter(&refs_block, &okf);
+            let new_yaml = match format {
+                // Markdown yaml has no surrounding newlines inside the fences;
+                // `body` already ends with `\n`, matching `extract_frontmatter`
+                // (which excludes the trailing `\n` before `---`). Trim one.
+                DocFormat::Markdown => body.trim_end_matches('\n').to_string(),
+                // HTML script content in canonical output is newline-wrapped.
+                DocFormat::Html => format!("\n{}", body),
+            };
+            let new_raw = splice_subslice(&raw, yaml, &new_yaml);
+            if new_raw == raw {
+                continue;
+            }
+            if dry_run {
+                println!("would migrate {}", rel_path.display());
+            } else {
+                fs::write(path, new_raw).with_context(|| format!("write {}", path.display()))?;
+                println!("migrated {}", rel_path.display());
+            }
+            changed += 1;
+        }
+    }
+    if changed == 0 {
+        println!("(nothing to migrate)");
     }
     Ok(ExitCode::SUCCESS)
 }

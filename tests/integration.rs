@@ -715,3 +715,75 @@ fn legacy_refs_emits_deprecation_warning() {
         .stderr(predicate::str::contains("deprecated"))
         .stderr(predicate::str::contains("kusara migrate"));
 }
+
+// ---------------------------------------------------------------------------
+// Migrate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn migrate_rewrites_legacy_markdown() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/a.md",
+        "---\nrefs:\n  id: spec:a\n  kind: spec\n  title: \"A\"\n  depends_on: [spec:b]\n---\n# body\n",
+    );
+    write(
+        dir.path(),
+        "docs/specs/b.md",
+        "---\nrefs:\n  id: spec:b\n  kind: spec\n---\n# b\n",
+    );
+    ks(dir.path()).arg("migrate").assert().success();
+    let a = fs::read_to_string(dir.path().join("docs/specs/a.md")).unwrap();
+    assert!(a.contains("type: spec"), "{a}");
+    assert!(a.contains("kusara:"), "{a}");
+    assert!(a.contains("id: spec:a"), "{a}");
+    assert!(a.contains("depends_on:"), "{a}");
+    assert!(!a.contains("refs:"), "{a}");
+    assert!(a.contains("# body"), "body preserved: {a}");
+    ks(dir.path()).arg("validate").assert().success();
+}
+
+#[test]
+fn migrate_is_idempotent() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/a.md",
+        "---\nrefs:\n  id: spec:a\n  kind: spec\n---\n# a\n",
+    );
+    ks(dir.path()).arg("migrate").assert().success();
+    let once = fs::read_to_string(dir.path().join("docs/specs/a.md")).unwrap();
+    ks(dir.path()).arg("migrate").assert().success();
+    let twice = fs::read_to_string(dir.path().join("docs/specs/a.md")).unwrap();
+    assert_eq!(once, twice, "second migrate must be a no-op");
+}
+
+#[test]
+fn migrate_dry_run_writes_nothing() {
+    let dir = fixture(MIN_KINDS_MD);
+    let original = "---\nrefs:\n  id: spec:a\n  kind: spec\n---\n# a\n";
+    write(dir.path(), "docs/specs/a.md", original);
+    ks(dir.path())
+        .args(["migrate", "--dry-run"])
+        .assert()
+        .success();
+    let after = fs::read_to_string(dir.path().join("docs/specs/a.md")).unwrap();
+    assert_eq!(after, original, "--dry-run must not modify files");
+}
+
+#[test]
+fn migrate_rewrites_legacy_html() {
+    let dir = fixture(HTML_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/a.html",
+        "<html><head><script type=\"application/kusara+yaml\">\nrefs:\n  id: spec:a\n  kind: spec\n</script></head><body>x</body></html>\n",
+    );
+    ks(dir.path()).arg("migrate").assert().success();
+    let a = fs::read_to_string(dir.path().join("docs/specs/a.html")).unwrap();
+    assert!(a.contains("type: spec"), "{a}");
+    assert!(a.contains("kusara:"), "{a}");
+    assert!(!a.contains("refs:"), "{a}");
+    assert!(a.contains("<body>x</body>"), "html body preserved: {a}");
+}
