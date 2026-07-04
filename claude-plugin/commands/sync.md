@@ -44,7 +44,7 @@ Rationale: don't compound damage on a broken graph.
 
 Run `kusara touched <file1> <file2> ...` with the resolved file list. This returns docs whose `modules:` cover the changed files (closure included by default).
 
-For each Markdown file in the input that is itself a doc tracked by kusara (has a `refs:` block), also run `kusara impact <id>` for that doc's id and merge the result into the affected set.
+For each Markdown file in the input that is itself a doc tracked by kusara (has a `kusara:` block — or, for not-yet-migrated docs, a legacy `refs:` block), also run `kusara impact <id>` for that doc's id and merge the result into the affected set.
 
 Result: a deduplicated set of doc paths + their ids. Call this `AFFECTED`.
 
@@ -58,7 +58,7 @@ Threshold: if `len(AFFECTED) >= 4`, dispatch parallel `doc-maintainer` agents �
 
 For each affected doc, the work unit is:
 
-> Given (changed_files, affected_doc_path, mode={prose|ref}), update affected_doc to reflect the changes. Update `refs:` frontmatter (`related:`, `depends_on:`, `modules:`) as warranted. In `prose` mode, also update body text — e.g., "See also" sections, references to renamed APIs, mention of new modules. Do **not** invent facts: only adjust what is supported by the diff of changed_files. Preserve existing IDs and ordering where unchanged.
+> Given (changed_files, affected_doc_path, mode={prose|ref}), update affected_doc to reflect the changes. Update the `kusara:` frontmatter block (`related:`, `depends_on:`, `modules:`) as warranted (legacy `refs:` docs: same fields, still nested under `refs:` until migrated). In `prose` mode, also update body text — e.g., "See also" sections, references to renamed APIs, mention of new modules. Do **not** invent facts: only adjust what is supported by the diff of changed_files. Preserve existing IDs and ordering where unchanged.
 
 Mode: `--ref` flag → `ref`, otherwise → `prose`.
 

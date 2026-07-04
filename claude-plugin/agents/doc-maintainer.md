@@ -10,7 +10,7 @@ description: |
     affected_doc_path = "docs/reference/auth-session.md"
     mode = "prose"
     dry_run = false
-  Agent reads the doc, reads the diff of the changed files, updates `modules:` and the "See also" section, and writes the file.
+  Agent reads the doc, reads the diff of the changed files, updates `kusara.modules:` and the "See also" section, and writes the file.
   </example>
 
   <example>
@@ -20,7 +20,7 @@ description: |
     affected_doc_path = "docs/reference/rbac.md"
     mode = "ref"
     dry_run = true
-  Agent emits a unified diff updating only frontmatter `modules:`/`related:` and writes nothing.
+  Agent emits a unified diff updating only the `kusara.modules:`/`kusara.related:` frontmatter fields and writes nothing.
   </example>
 model: sonnet
 color: cyan
@@ -40,14 +40,14 @@ If any of these is missing, fail fast with a one-line error. Do not guess.
 
 ## What you may change
 
-- The `refs:` frontmatter block of `affected_doc_path`. Allowed fields: `related`, `depends_on`, `modules`, `implements`, `provides`, `title`. Never touch `id`, `kind`, `generated`, or `indexes_kind`.
+- The `kusara:` frontmatter block of `affected_doc_path` (or, for a not-yet-migrated doc, its legacy `refs:` block — same fields, different nesting). Allowed fields: `related`, `depends_on`, `modules`, `implements`, `provides`, plus the shared top-level `title`. Never touch `id`, `type`/`kind`, `generated`, or `indexes_kind`.
 - In `prose` mode only: the body text — typically "See also" sections, references to renamed APIs, mentions of new modules. Edits MUST be minimal, surgical, and grounded in `changed_files`.
 
 ## What you must NOT change
 
 - Any file other than `affected_doc_path`.
-- The `id`, `kind`, `generated`, or `indexes_kind` frontmatter fields.
-- Generated index files (their `kind` is `index`).
+- The `id`, `type`/`kind`, `generated`, or `indexes_kind` frontmatter fields.
+- Generated index files (their `type` is `index`).
 - Body text in `ref` mode.
 
 ## Workflow

@@ -30,13 +30,13 @@ claude --plugin-dir ./claude-plugin
 - `/kusara:setup [--upgrade] [--from-source <path>]` — install or upgrade the `kusara` CLI binary via `cargo install`. User-confirmed; no silent builds. Run this once before the others. The other commands pre-flight `command -v kusara` and point here on miss.
 - `/kusara:sync [files...] [--ref] [--dry-run]` — main workflow. Auto-detects (or accepts) changed files, runs `kusara validate`, computes affected docs via `kusara touched`/`kusara impact`, applies maintenance edits (frontmatter by default; prose too unless `--ref`), regenerates indexes, re-validates. Fans out to parallel `doc-maintainer` agents when 4+ docs are affected.
 - `/kusara:check [--quiet]` — read-only audit. Runs `kusara validate` and groups findings into broken IDs / schema errors / module conflicts.
-- `/kusara:add-ref <file> [--kind <kind>] [--id <id>]` — guided `refs:` frontmatter authoring for a single file.
+- `/kusara:add-ref <file> [--kind <kind>] [--id <id>]` — guided `kusara:` frontmatter authoring for a single file.
 
 All three commands set `disable-model-invocation: true`. They run only on explicit user invocation.
 
 ### Skills (auto-loaded)
 
-- `refs-schema` — authoritative schema for the `refs:` frontmatter block. Triggers when editing or interpreting `refs:` fields.
+- `refs-schema` — authoritative schema for the OKF-native frontmatter shape (flat `type:` + `kusara:` block). Legacy `refs:`-wrapped frontmatter is still read but deprecated (`kusara migrate` rewrites it in place). Triggers when editing or interpreting kusara frontmatter fields.
 - `kinds-manifest` — knowledge of `${KUSARA_DOC_ROOT}/kinds.md` format. Triggers when picking a kind or answering kind/path-glob questions.
 
 Both ship with a `references/` directory carrying verbatim copies of the kusara repo's `docs/refs.md` and `docs/kinds.md` for offline accuracy.
@@ -49,7 +49,7 @@ Both ship with a `references/` directory carrying verbatim copies of the kusara 
 
 - `kusara` binary on `$PATH`. Easiest: run `/kusara:setup` once. Manual: `cargo install --path .` from the repo root.
 - Rust toolchain (`cargo`) for building from source. Install via [rustup](https://rustup.rs).
-- Project repo carrying `${KUSARA_DOC_ROOT}/kinds.md` (default `docs/kinds.md`) and Markdown docs with `refs:` frontmatter (HTML docs carry the same YAML in a `<script type="application/kusara+yaml">` data block).
+- Project repo carrying `${KUSARA_DOC_ROOT}/kinds.md` (default `docs/kinds.md`) and Markdown docs with OKF-native frontmatter (flat `type:` + `kusara:` block; HTML docs carry the same YAML in a `<script type="application/kusara+yaml">` data block). Legacy `refs:`-wrapped frontmatter is still read but deprecated — run `kusara migrate` to rewrite it.
 
 ## Typical loop
 

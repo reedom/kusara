@@ -42,12 +42,12 @@ tags: [auth, security]           # OKF reserved (new, optional).
 timestamp: 2026-07-04T00:00:00Z  # OKF reserved (new, optional) — ISO 8601.
 kusara:                          # kusara graph layer — OKF-arbitrary extra key.
   id: fr:login                   # required. kusara's ID authority (path-independent).
+  spec: auth                     # parent spec (null for cross-spec).
   implements: [req:auth]         # hard edge: exists to satisfy these upstream artifacts.
   depends_on: [spec:auth]        # hard edge: would be wrong without these.
   related: []                    # soft edge: see-also.
   provides: []                   # sub-IDs declared in this file (file-less IDs).
   modules: [src/auth/session.rs] # source paths this doc is the design of record for.
-  spec: auth                     # parent spec (null for cross-spec).
   # generated / indexes_kind: machine-written only (kusara index); never hand-edited.
 ---
 ```
@@ -63,12 +63,12 @@ kusara:                          # kusara graph layer — OKF-arbitrary extra ke
 | `tags`                        | OKF (flat)     | no       | Stored, surfaced; not validated.                  |
 | `timestamp`                   | OKF (flat)     | no       | Stored, surfaced; not validated.                  |
 | `kusara.id`                   | kusara         | yes      | Unique repo-wide; ID authority.                   |
+| `kusara.spec`                 | kusara         | no       | Parent spec.                                       |
 | `kusara.implements`           | kusara         | no       | Hard edge.                                        |
 | `kusara.depends_on`           | kusara         | no       | Hard edge.                                        |
 | `kusara.related`              | kusara         | no       | Soft edge.                                        |
 | `kusara.provides`             | kusara         | no       | File-less sub-IDs.                                |
 | `kusara.modules`              | kusara         | no       | Doc-of-record source paths.                       |
-| `kusara.spec`                 | kusara         | no       | Parent spec.                                       |
 | `kusara.generated`            | kusara         | no       | Machine-written only.                             |
 | `kusara.indexes_kind`         | kusara         | no       | Machine-written only.                             |
 
