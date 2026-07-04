@@ -260,8 +260,59 @@ fn extract_fenced_yaml(content: &str) -> Option<&str> {
 
 #[derive(Debug, Deserialize)]
 struct FrontMatter {
+    // Legacy shape: everything nested under `refs:`.
     #[serde(default)]
     refs: Option<RefsBlock>,
+    // OKF shape: `type` is the bridge field (== kind), `title` shared, plus
+    // OKF reserved keys, plus the kusara graph layer under `kusara:`.
+    #[serde(default, rename = "type")]
+    typ: Option<Kind>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    resource: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
+    #[serde(default)]
+    kusara: Option<KusaraBlock>,
+}
+
+/// The kusara graph layer in the OKF shape. Mirrors `RefsBlock` minus the
+/// hoisted `kind`/`title`. Unknown keys are rejected: this is our namespace.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KusaraBlock {
+    id: DocId,
+    #[serde(default)]
+    spec: Option<String>,
+    #[serde(default)]
+    provides: Vec<DocId>,
+    #[serde(default)]
+    implements: Vec<DocId>,
+    #[serde(default)]
+    depends_on: Vec<DocId>,
+    #[serde(default)]
+    related: Vec<DocId>,
+    #[serde(default)]
+    modules: Vec<String>,
+    #[serde(default)]
+    generated: bool,
+    #[serde(default)]
+    indexes_kind: Option<Kind>,
+}
+
+/// OKF reserved keys that have no place in the legacy `refs:` shape. Carried
+/// onto `Doc` and surfaced in `show`/JSON; never validated for content.
+#[derive(Debug, Clone, Default)]
+struct OkfMeta {
+    description: Option<String>,
+    resource: Option<String>,
+    tags: Vec<String>,
+    timestamp: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,6 +340,50 @@ struct RefsBlock {
     indexes_kind: Option<Kind>,
 }
 
+impl FrontMatter {
+    /// Normalize either shape into `(RefsBlock, OkfMeta)`.
+    /// `Ok(None)` = the file carries no kusara metadata (skip it).
+    /// `Err` = ambiguous shape or a missing required field.
+    fn normalize(self) -> Result<Option<(RefsBlock, OkfMeta)>, String> {
+        let has_okf = self.typ.is_some() || self.kusara.is_some();
+        match (self.refs, has_okf) {
+            (Some(_), true) => {
+                Err("ambiguous front matter: both `refs:` and OKF `type:`/`kusara:` present".into())
+            }
+            (Some(refs), false) => Ok(Some((refs, OkfMeta::default()))),
+            (None, false) => Ok(None),
+            (None, true) => {
+                let kind = self
+                    .typ
+                    .ok_or("OKF front matter missing required `type:`")?;
+                let k = self
+                    .kusara
+                    .ok_or("OKF front matter missing required `kusara:` block")?;
+                let refs = RefsBlock {
+                    id: k.id,
+                    kind,
+                    title: self.title,
+                    spec: k.spec,
+                    provides: k.provides,
+                    implements: k.implements,
+                    depends_on: k.depends_on,
+                    related: k.related,
+                    modules: k.modules,
+                    generated: k.generated,
+                    indexes_kind: k.indexes_kind,
+                };
+                let okf = OkfMeta {
+                    description: self.description,
+                    resource: self.resource,
+                    tags: self.tags,
+                    timestamp: self.timestamp,
+                };
+                Ok(Some((refs, okf)))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Doc {
     id: DocId,
@@ -301,6 +396,16 @@ struct Doc {
     depends_on: Vec<DocId>,
     related: Vec<DocId>,
     modules: Vec<String>,
+    /// OKF reserved metadata, carried through from either shape. Not yet
+    /// consumed by any command; a later task surfaces these in `show`/JSON.
+    #[allow(dead_code)]
+    description: Option<String>,
+    #[allow(dead_code)]
+    resource: Option<String>,
+    #[allow(dead_code)]
+    tags: Vec<String>,
+    #[allow(dead_code)]
+    timestamp: Option<String>,
 }
 
 /// Classifies a doc as either user-authored or `kusara`-generated.
@@ -514,8 +619,13 @@ fn build_graph(root: &Path, doc_root: &Path, manifest: &Manifest) -> Result<(Gra
                     continue;
                 }
             };
-            let Some(refs_block) = fm.refs else {
-                continue;
+            let (refs_block, okf_meta) = match fm.normalize() {
+                Ok(Some(v)) => v,
+                Ok(None) => continue,
+                Err(msg) => {
+                    errors.push(format!("{}: {msg}", rel.display()));
+                    continue;
+                }
             };
             if !manifest.knows(&refs_block.kind) {
                 errors.push(format!(
@@ -565,6 +675,10 @@ fn build_graph(root: &Path, doc_root: &Path, manifest: &Manifest) -> Result<(Gra
                 depends_on: refs_block.depends_on,
                 related: refs_block.related,
                 modules: refs_block.modules,
+                description: okf_meta.description,
+                resource: okf_meta.resource,
+                tags: okf_meta.tags,
+                timestamp: okf_meta.timestamp,
             };
             if let Some(prev) = docs.get(&doc.id) {
                 errors.push(format!(

@@ -575,3 +575,95 @@ fn kusara_doc_root_invalid_unicode_bails() {
         .failure()
         .stderr(predicate::str::contains("KUSARA_DOC_ROOT"));
 }
+
+// ---------------------------------------------------------------------------
+// OKF-shape frontmatter (dual-read)
+// ---------------------------------------------------------------------------
+
+// NOTE: written as a single-line literal (not split across source lines with
+// `\` continuations) because Rust's string continuation strips ALL leading
+// whitespace on the following source line, which would eat the YAML nesting
+// indentation under `kusara:`.
+const OKF_DOC: &str = "---\ntype: spec\ntitle: \"Auth\"\ndescription: \"Authentication design\"\ntags: [auth, security]\nkusara:\n  id: spec:auth\n---\n\n# Auth\n";
+
+#[test]
+fn okf_shape_validates() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/specs/auth.md", OKF_DOC);
+    ks(dir.path()).arg("validate").assert().success();
+}
+
+#[test]
+fn okf_shape_resolves_refs_like_legacy() {
+    let dir = fixture(MIN_KINDS_MD);
+    // Legacy upstream, OKF downstream that depends on it: no dangling => success.
+    write(
+        dir.path(),
+        "docs/specs/up.md",
+        "---\nrefs:\n  id: spec:up\n  kind: spec\n---\n# up\n",
+    );
+    write(
+        dir.path(),
+        "docs/specs/down.md",
+        "---\ntype: spec\nkusara:\n  id: spec:down\n  depends_on: [spec:up]\n---\n# down\n",
+    );
+    ks(dir.path()).arg("validate").assert().success();
+    ks(dir.path())
+        .args(["show", "spec:down"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("kind:     spec"))
+        .stdout(predicate::str::contains("depends_on:"));
+}
+
+#[test]
+fn okf_and_legacy_both_present_is_error() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/x.md",
+        "---\ntype: spec\nkusara:\n  id: spec:x\nrefs:\n  id: spec:x\n  kind: spec\n---\n# x\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ambiguous"));
+}
+
+#[test]
+fn okf_unknown_key_in_kusara_rejected() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/x.md",
+        "---\ntype: spec\nkusara:\n  id: spec:x\n  bogus: 1\n---\n# x\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("front matter parse error"));
+}
+
+#[test]
+fn okf_top_level_unknown_key_tolerated() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/x.md",
+        "---\ntype: spec\ncustom_field: hello\nkusara:\n  id: spec:x\n---\n# x\n",
+    );
+    ks(dir.path()).arg("validate").assert().success();
+}
+
+#[test]
+fn okf_missing_id_rejected() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/x.md",
+        "---\ntype: spec\nkusara:\n  implements: [spec:up]\n---\n# x\n",
+    );
+    ks(dir.path()).arg("validate").assert().failure();
+}
