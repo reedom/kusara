@@ -344,13 +344,13 @@ impl FrontMatter {
     /// Normalize either shape into `(RefsBlock, OkfMeta)`.
     /// `Ok(None)` = the file carries no kusara metadata (skip it).
     /// `Err` = ambiguous shape or a missing required field.
-    fn normalize(self) -> Result<Option<(RefsBlock, OkfMeta)>, String> {
+    fn normalize(self) -> Result<Option<(RefsBlock, OkfMeta, bool)>, String> {
         let has_okf = self.typ.is_some() || self.kusara.is_some();
         match (self.refs, has_okf) {
             (Some(_), true) => {
                 Err("ambiguous front matter: both `refs:` and OKF `type:`/`kusara:` present".into())
             }
-            (Some(refs), false) => Ok(Some((refs, OkfMeta::default()))),
+            (Some(refs), false) => Ok(Some((refs, OkfMeta::default(), true))),
             (None, false) => Ok(None),
             (None, true) => {
                 let kind = self
@@ -378,7 +378,7 @@ impl FrontMatter {
                     tags: self.tags,
                     timestamp: self.timestamp,
                 };
-                Ok(Some((refs, okf)))
+                Ok(Some((refs, okf, false)))
             }
         }
     }
@@ -614,7 +614,7 @@ fn build_graph(root: &Path, doc_root: &Path, manifest: &Manifest) -> Result<(Gra
                     continue;
                 }
             };
-            let (refs_block, okf_meta) = match fm.normalize() {
+            let (refs_block, okf_meta, is_legacy) = match fm.normalize() {
                 Ok(Some(v)) => v,
                 Ok(None) => continue,
                 Err(msg) => {
@@ -622,6 +622,12 @@ fn build_graph(root: &Path, doc_root: &Path, manifest: &Manifest) -> Result<(Gra
                     continue;
                 }
             };
+            if is_legacy {
+                eprintln!(
+                    "warning: {}: legacy `refs:` front matter is deprecated; run `kusara migrate`",
+                    rel.display()
+                );
+            }
             if !manifest.knows(&refs_block.kind) {
                 errors.push(format!(
                     "{} ({}): unknown kind `{}` (not declared in kinds.md)",

@@ -699,3 +699,19 @@ fn okf_missing_id_rejected() {
     );
     ks(dir.path()).arg("validate").assert().failure();
 }
+
+#[test]
+fn legacy_refs_emits_deprecation_warning() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/a.md",
+        "---\nrefs:\n  id: spec:a\n  kind: spec\n---\n# a\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .success() // legacy still valid...
+        .stderr(predicate::str::contains("deprecated"))
+        .stderr(predicate::str::contains("kusara migrate"));
+}
