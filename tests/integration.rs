@@ -587,6 +587,18 @@ fn kusara_doc_root_invalid_unicode_bails() {
 const OKF_DOC: &str = "---\ntype: spec\ntitle: \"Auth\"\ndescription: \"Authentication design\"\ntags: [auth, security]\nkusara:\n  id: spec:auth\n---\n\n# Auth\n";
 
 #[test]
+fn okf_fields_surface_in_show() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/specs/auth.md", OKF_DOC); // has description + tags
+    ks(dir.path())
+        .args(["show", "spec:auth"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("description: Authentication design"))
+        .stdout(predicate::str::contains("tags:     auth, security"));
+}
+
+#[test]
 fn okf_shape_validates() {
     let dir = fixture(MIN_KINDS_MD);
     write(dir.path(), "docs/specs/auth.md", OKF_DOC);

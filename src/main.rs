@@ -396,15 +396,10 @@ struct Doc {
     depends_on: Vec<DocId>,
     related: Vec<DocId>,
     modules: Vec<String>,
-    /// OKF reserved metadata, carried through from either shape. Not yet
-    /// consumed by any command; a later task surfaces these in `show`/JSON.
-    #[allow(dead_code)]
+    /// OKF reserved metadata, carried through from either shape.
     description: Option<String>,
-    #[allow(dead_code)]
     resource: Option<String>,
-    #[allow(dead_code)]
     tags: Vec<String>,
-    #[allow(dead_code)]
     timestamp: Option<String>,
 }
 
@@ -1073,6 +1068,18 @@ fn cmd_show(graph: &Graph, id: &str) -> Result<ExitCode> {
     if let Some(t) = &doc.title {
         println!("title:    {t}");
     }
+    if let Some(d) = &doc.description {
+        println!("description: {d}");
+    }
+    if let Some(r) = &doc.resource {
+        println!("resource: {r}");
+    }
+    if !doc.tags.is_empty() {
+        println!("tags:     {}", doc.tags.join(", "));
+    }
+    if let Some(ts) = &doc.timestamp {
+        println!("timestamp: {ts}");
+    }
     println!("path:     {}", doc.rel_path.display());
 
     print_list("provides:", &doc.provides);
@@ -1317,6 +1324,18 @@ struct JsonDoc<'a> {
     depends_on: &'a [DocId],
     related: &'a [DocId],
     modules: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<&'a String>,
+    #[serde(skip_serializing_if = "slice_is_empty")]
+    tags: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timestamp: Option<&'a String>,
+}
+
+fn slice_is_empty<T>(s: &&[T]) -> bool {
+    s.is_empty()
 }
 
 fn build_graph_json(graph: &Graph) -> Result<String> {
@@ -1336,6 +1355,10 @@ fn build_graph_json(graph: &Graph) -> Result<String> {
             depends_on: &d.depends_on,
             related: &d.related,
             modules: &d.modules,
+            description: d.description.as_ref(),
+            resource: d.resource.as_ref(),
+            tags: &d.tags,
+            timestamp: d.timestamp.as_ref(),
         })
         .collect();
     let mut modules: BTreeMap<&String, BTreeSet<&DocId>> = BTreeMap::new();
