@@ -96,7 +96,7 @@ The heart of the change lives in the frontmatter deserialization boundary. Downs
   - OKF reserved keys are left absent unless already present.
 - Idempotent: already-migrated (OKF-shape) docs are left untouched.
 - Handles both Markdown and HTML variants.
-- `--dry-run` prints a unified diff and writes nothing; default writes in place.
+- `--dry-run` lists the files that would change and writes nothing; default writes in place.
 - **Known limitation, surfaced in `--help` and this spec:** YAML round-trip drops comments inside the frontmatter block. Body content below the frontmatter is untouched.
 
 ### Validation & deprecation
@@ -117,7 +117,7 @@ The heart of the change lives in the frontmatter deserialization boundary. Downs
 - Dual-read: a legacy `refs:` doc and an OKF-shape doc parse to the same `Doc`.
 - Ambiguity: a doc with both `refs:` and `kusara:` is rejected with a clear error.
 - HTML variant: both shapes parse inside `<script type="application/kusara+yaml">`.
-- `migrate`: legacy → OKF output is correct; running twice is a no-op (idempotent); `--dry-run` writes nothing and prints a diff.
+- `migrate`: legacy → OKF output is correct; running twice is a no-op (idempotent); `--dry-run` writes nothing and lists the files that would change.
 - Deprecation: validating a legacy doc emits the warning and still succeeds.
 - OKF keys: `description`/`resource`/`tags`/`timestamp` round-trip through parse → `Doc` → `show`/JSON.
 - `kusara.*` unknown-key rejection; top-level unknown-key tolerance.
