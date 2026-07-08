@@ -64,6 +64,9 @@ enum Cmd {
     /// List docs whose `modules:` code changed after the doc's last commit
     /// (git history based; uncommitted docs are treated as fresh).
     Stale,
+    /// Report which git-tracked files under the given paths are claimed by a
+    /// doc's `modules:` — and roll up the unclaimed remainder.
+    Coverage { paths: Vec<PathBuf> },
     /// List every known ID (debug aid).
     List,
     /// Rewrite legacy `refs:` front matter into the OKF-native shape in place.
@@ -567,6 +570,7 @@ fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
         Cmd::Touched { files, no_closure } => cmd_touched(root, &graph, files, *no_closure),
         Cmd::Index { target } => cmd_index(root, doc_root, &manifest, &graph, *target),
         Cmd::Stale => cmd_stale(root, &graph),
+        Cmd::Coverage { paths } => cmd_coverage(root, &graph, paths),
         Cmd::List => cmd_list(&graph),
         Cmd::Migrate { dry_run } => cmd_migrate(root, doc_root, &manifest, *dry_run),
         Cmd::Hook { .. } => unreachable!("hook commands dispatch before the graph load"),
@@ -1409,6 +1413,95 @@ fn cmd_stale(root: &Path, graph: &Graph) -> Result<ExitCode> {
     println!();
     println!("{} stale doc(s)", findings.len());
     Ok(ExitCode::from(1))
+}
+
+// ---------------------------------------------------------------------------
+// Coverage (which code is claimed by a doc's `modules:`)
+// ---------------------------------------------------------------------------
+
+fn cmd_coverage(root: &Path, graph: &Graph, paths: &[PathBuf]) -> Result<ExitCode> {
+    if paths.is_empty() {
+        bail!("at least one path is required (e.g. `kusara coverage src`)");
+    }
+    let files = git_tracked_files(root, paths)?;
+    if files.is_empty() {
+        bail!("no git-tracked files under the given paths");
+    }
+    let patterns: BTreeSet<String> = graph
+        .docs
+        .values()
+        .flat_map(|d| d.modules.iter())
+        .map(|m| normalize_separators(m))
+        .collect();
+    let mut covered: BTreeSet<String> = BTreeSet::new();
+    let mut uncovered: BTreeSet<String> = BTreeSet::new();
+    for f in &files {
+        if patterns.iter().any(|p| module_covers(p, f)) {
+            covered.insert(f.clone());
+        } else {
+            uncovered.insert(f.clone());
+        }
+    }
+    if !uncovered.is_empty() {
+        println!("Uncovered (no doc claims these in `modules:`):");
+        for entry in rollup_uncovered(&uncovered, &covered) {
+            println!("  {entry}");
+        }
+        println!();
+    }
+    let pct = covered.len() * 100 / files.len();
+    println!(
+        "coverage: {}/{} files covered ({pct}%)",
+        covered.len(),
+        files.len()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Lists git-tracked files under `paths`, repo-relative with `/` separators.
+fn git_tracked_files(root: &Path, paths: &[PathBuf]) -> Result<Vec<String>> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C").arg(root).args(["ls-files", "-z", "--"]);
+    for p in paths {
+        cmd.arg(p);
+    }
+    let out = cmd.output().context("run git (is git installed?)")?;
+    if !out.status.success() {
+        bail!(
+            "git ls-files failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(normalize_separators)
+        .collect())
+}
+
+/// Collapses uncovered files into their shallowest ancestor directory that
+/// contains no covered file; files with no such ancestor stay as-is.
+fn rollup_uncovered(uncovered: &BTreeSet<String>, covered: &BTreeSet<String>) -> Vec<String> {
+    let dir_is_clean = |dir: &str| {
+        let prefix = format!("{dir}/");
+        !covered.iter().any(|f| f.starts_with(&prefix))
+    };
+    let mut entries: BTreeSet<String> = BTreeSet::new();
+    for file in uncovered {
+        let mut rolled = None;
+        let mut end = 0usize;
+        while let Some(rel) = file[end..].find('/') {
+            end += rel;
+            let dir = &file[..end];
+            if dir_is_clean(dir) {
+                rolled = Some(format!("{dir}/"));
+                break;
+            }
+            end += 1;
+        }
+        entries.insert(rolled.unwrap_or_else(|| file.clone()));
+    }
+    entries.into_iter().collect()
 }
 
 fn cmd_index(
