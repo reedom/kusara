@@ -862,3 +862,250 @@ fn migrate_rewrites_legacy_html() {
     assert!(!a.contains("refs:"), "{a}");
     assert!(a.contains("<body>x</body>"), "html body preserved: {a}");
 }
+
+// ---------------------------------------------------------------------------
+// Claude Code hook adapters
+// ---------------------------------------------------------------------------
+
+fn postedit_payload(session: &str, file: &str) -> String {
+    format!(
+        r#"{{"session_id":"{session}","tool_name":"Edit","tool_input":{{"file_path":"{file}"}}}}"#
+    )
+}
+
+fn stop_payload(session: &str, active: bool) -> String {
+    format!(r#"{{"session_id":"{session}","stop_hook_active":{active}}}"#)
+}
+
+fn journal_contents(dir: &Path) -> String {
+    let mut out = String::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return out;
+    };
+    for e in entries {
+        out += &fs::read_to_string(e.unwrap().path()).unwrap();
+    }
+    out
+}
+
+fn run_postedit(root: &Path, journal: &Path, session: &str, file: &str) {
+    ks(root)
+        .args(["hook", "postedit", "--journal-dir"])
+        .arg(journal)
+        .write_stdin(postedit_payload(session, file))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn hook_postedit_records_relative_path_without_manifest() {
+    // No kinds.md on purpose: postedit must not need the graph.
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("journal");
+    let abs = dir.path().join("src/a.rs").display().to_string();
+    run_postedit(dir.path(), &journal, "s1", &abs);
+    assert_eq!(journal_contents(&journal), "src/a.rs\n");
+}
+
+#[test]
+fn hook_postedit_ignores_files_outside_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("journal");
+    run_postedit(dir.path(), &journal, "s1", "/somewhere/else/a.rs");
+    assert_eq!(journal_contents(&journal), "");
+}
+
+#[test]
+fn hook_postedit_tolerates_garbage_and_empty_stdin() {
+    let dir = tempfile::tempdir().unwrap();
+    for stdin in ["", "not json", r#"{"tool_input":{}}"#] {
+        ks(dir.path())
+            .args(["hook", "postedit"])
+            .write_stdin(stdin)
+            .assert()
+            .success()
+            .stdout(predicate::str::is_empty());
+    }
+}
+
+#[test]
+fn hook_stop_silent_without_journal() {
+    let dir = fixture(MIN_KINDS_MD);
+    let journal = dir.path().join("journal");
+    ks(dir.path())
+        .args(["hook", "stop", "--journal-dir"])
+        .arg(&journal)
+        .write_stdin(stop_payload("s1", false))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn hook_stop_reports_docs_of_record_for_source_edit() {
+    let dir = fixture(MIN_KINDS_MD);
+    let journal = dir.path().join("journal");
+    fs::create_dir_all(dir.path().join("src/auth")).unwrap();
+    fs::write(dir.path().join("src/auth/session.rs"), "").unwrap();
+    write(
+        dir.path(),
+        "docs/specs/auth.md",
+        "---\nrefs:\n  id: spec:auth\n  kind: spec\n  modules:\n    - src/auth/\n---\n",
+    );
+    let abs = dir.path().join("src/auth/session.rs").display().to_string();
+    run_postedit(dir.path(), &journal, "s1", &abs);
+    ks(dir.path())
+        .args(["hook", "stop", "--journal-dir"])
+        .arg(&journal)
+        .write_stdin(stop_payload("s1", false))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("additionalContext"))
+        .stdout(predicate::str::contains("spec:auth"))
+        .stdout(predicate::str::contains("src/auth/session.rs"));
+    // Journal is consumed: a second stop is silent.
+    ks(dir.path())
+        .args(["hook", "stop", "--journal-dir"])
+        .arg(&journal)
+        .write_stdin(stop_payload("s1", false))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn hook_stop_lists_linked_docs_for_edited_managed_doc() {
+    let dir = fixture(MIN_KINDS_MD);
+    let journal = dir.path().join("journal");
+    write(
+        dir.path(),
+        "docs/specs/auth.md",
+        "---\nrefs:\n  id: spec:auth\n  kind: spec\n---\n",
+    );
+    write(
+        dir.path(),
+        "docs/specs/parent.md",
+        "---\nrefs:\n  id: spec:parent\n  kind: spec\n  depends_on:\n    - spec:auth\n---\n",
+    );
+    let abs = dir.path().join("docs/specs/auth.md").display().to_string();
+    run_postedit(dir.path(), &journal, "s1", &abs);
+    ks(dir.path())
+        .args(["hook", "stop", "--journal-dir"])
+        .arg(&journal)
+        .write_stdin(stop_payload("s1", false))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("content drift"))
+        .stdout(predicate::str::contains("spec:auth"))
+        .stdout(predicate::str::contains("spec:parent"));
+}
+
+#[test]
+fn hook_stop_silent_for_unmanaged_edit() {
+    let dir = fixture(MIN_KINDS_MD);
+    let journal = dir.path().join("journal");
+    let abs = dir.path().join("README.md").display().to_string();
+    run_postedit(dir.path(), &journal, "s1", &abs);
+    ks(dir.path())
+        .args(["hook", "stop", "--journal-dir"])
+        .arg(&journal)
+        .write_stdin(stop_payload("s1", false))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn hook_stop_blocks_on_validate_error() {
+    let dir = fixture(MIN_KINDS_MD);
+    let journal = dir.path().join("journal");
+    // Managed path without refs front matter -> validate error.
+    write(dir.path(), "docs/specs/orphan.md", "# no refs here\n");
+    let abs = dir
+        .path()
+        .join("docs/specs/orphan.md")
+        .display()
+        .to_string();
+    run_postedit(dir.path(), &journal, "s1", &abs);
+    ks(dir.path())
+        .args(["hook", "stop", "--journal-dir"])
+        .arg(&journal)
+        .write_stdin(stop_payload("s1", false))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""decision":"block""#))
+        .stdout(predicate::str::contains("orphan.md"));
+}
+
+#[test]
+fn hook_stop_downgrades_block_when_stop_hook_active() {
+    let dir = fixture(MIN_KINDS_MD);
+    let journal = dir.path().join("journal");
+    write(dir.path(), "docs/specs/orphan.md", "# no refs here\n");
+    let abs = dir
+        .path()
+        .join("docs/specs/orphan.md")
+        .display()
+        .to_string();
+    run_postedit(dir.path(), &journal, "s1", &abs);
+    ks(dir.path())
+        .args(["hook", "stop", "--journal-dir"])
+        .arg(&journal)
+        .write_stdin(stop_payload("s1", true))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("additionalContext"))
+        .stdout(predicate::str::contains("block").not());
+}
+
+#[test]
+fn hook_stop_appends_note() {
+    let dir = fixture(MIN_KINDS_MD);
+    let journal = dir.path().join("journal");
+    fs::create_dir_all(dir.path().join("src/auth")).unwrap();
+    fs::write(dir.path().join("src/auth/session.rs"), "").unwrap();
+    write(
+        dir.path(),
+        "docs/specs/auth.md",
+        "---\nrefs:\n  id: spec:auth\n  kind: spec\n  modules:\n    - src/auth/\n---\n",
+    );
+    let abs = dir.path().join("src/auth/session.rs").display().to_string();
+    run_postedit(dir.path(), &journal, "s1", &abs);
+    ks(dir.path())
+        .args([
+            "hook",
+            "stop",
+            "--note",
+            "Decision table: .claude/rules/refs.md",
+            "--journal-dir",
+        ])
+        .arg(&journal)
+        .write_stdin(stop_payload("s1", false))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Decision table"));
+}
+
+#[test]
+fn hook_stop_sessions_are_isolated() {
+    let dir = fixture(MIN_KINDS_MD);
+    let journal = dir.path().join("journal");
+    fs::create_dir_all(dir.path().join("src/auth")).unwrap();
+    fs::write(dir.path().join("src/auth/session.rs"), "").unwrap();
+    write(
+        dir.path(),
+        "docs/specs/auth.md",
+        "---\nrefs:\n  id: spec:auth\n  kind: spec\n  modules:\n    - src/auth/\n---\n",
+    );
+    let abs = dir.path().join("src/auth/session.rs").display().to_string();
+    run_postedit(dir.path(), &journal, "s1", &abs);
+    // A different session sees no journal.
+    ks(dir.path())
+        .args(["hook", "stop", "--journal-dir"])
+        .arg(&journal)
+        .write_stdin(stop_payload("s2", false))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}

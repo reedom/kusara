@@ -121,9 +121,49 @@ kusara list
 kusara index map
 kusara index
 kusara migrate [--dry-run]
+kusara hook postedit [--journal-dir <DIR>]
+kusara hook stop [--journal-dir <DIR>] [--note <TEXT>]
 ```
 
 `--root <DIR>` (global): override the repo root (default: cwd).
+
+## Claude Code hooks
+
+`kusara hook` adapts the graph checks to Claude Code's hook protocol so a
+session pays the check cost once per turn instead of once per edit:
+
+- `kusara hook postedit` — wire to the `PostToolUse` event (matcher
+  `Edit|Write|MultiEdit`). Reads the hook payload on stdin and appends the
+  edited file to a per-session journal under the system temp dir. No graph
+  load, no output.
+- `kusara hook stop` — wire to the `Stop` event. Consumes the journal, runs
+  one whole-graph validate plus a batch `touched` over every file edited this
+  turn, and emits a single context block: validate failures block the stop
+  (downgraded to plain context when `stop_hook_active` is set); otherwise the
+  affected docs of record and the link fan-out of edited managed docs are
+  injected as non-blocking context. Silent when nothing relevant changed.
+  `--note <TEXT>` appends a repo-specific line (e.g. a pointer to your
+  cross-reference rules file) to every emission.
+
+`.claude/settings.json` wiring:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "kusara hook postedit" }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "kusara hook stop --note 'Rules: .claude/rules/refs.md'" }]
+      }
+    ]
+  }
+}
+```
 
 ## Configuration
 
