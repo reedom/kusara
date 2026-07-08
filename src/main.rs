@@ -69,6 +69,31 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Claude Code hook adapters. Each reads the hook JSON payload on stdin.
+    Hook {
+        #[command(subcommand)]
+        cmd: HookCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum HookCmd {
+    /// PostToolUse: append the edited file to the session journal. Emits nothing.
+    Postedit {
+        /// Journal directory (default: <system tmp>/kusara-hook).
+        #[arg(long, value_name = "DIR")]
+        journal_dir: Option<PathBuf>,
+    },
+    /// Stop: batch-check the session's journaled edits (validate + touched)
+    /// and emit a single context block, then clear the journal.
+    Stop {
+        /// Journal directory (default: <system tmp>/kusara-hook).
+        #[arg(long, value_name = "DIR")]
+        journal_dir: Option<PathBuf>,
+        /// Extra line appended to any emitted context (e.g. a pointer to repo rules).
+        #[arg(long, value_name = "TEXT")]
+        note: Option<String>,
+    },
 }
 
 #[derive(clap::ValueEnum, Debug, PartialEq, Eq, Clone, Copy)]
@@ -508,6 +533,12 @@ fn real_main() -> Result<ExitCode> {
 }
 
 fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
+    // Hook adapters dispatch before the manifest/graph load: `postedit` must
+    // stay on a fast no-graph path, and `stop` reports load failures as hook
+    // context instead of a hard error.
+    if let Cmd::Hook { cmd } = &cli.cmd {
+        return run_hook(cmd, root, doc_root);
+    }
     let manifest = Manifest::load(root, doc_root)?;
     let warn_deprecated = !matches!(cli.cmd, Cmd::Migrate { .. });
     let (graph, parse_errors) = build_graph(root, doc_root, &manifest, warn_deprecated)?;
@@ -534,6 +565,7 @@ fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
         Cmd::Index { target } => cmd_index(root, doc_root, &manifest, &graph, *target),
         Cmd::List => cmd_list(&graph),
         Cmd::Migrate { dry_run } => cmd_migrate(root, doc_root, &manifest, *dry_run),
+        Cmd::Hook { .. } => unreachable!("hook commands dispatch before the graph load"),
     }
 }
 
@@ -935,6 +967,25 @@ fn cmd_validate(
     graph: &Graph,
     parse_errors: &[String],
 ) -> Result<ExitCode> {
+    let errors = collect_validate_errors(root, manifest, graph, parse_errors);
+    if errors.is_empty() {
+        println!("OK ({} docs)", graph.docs.len());
+        Ok(ExitCode::SUCCESS)
+    } else {
+        for e in &errors {
+            eprintln!("- {e}");
+        }
+        eprintln!("\n{} error(s)", errors.len());
+        Ok(ExitCode::from(1))
+    }
+}
+
+fn collect_validate_errors(
+    root: &Path,
+    manifest: &Manifest,
+    graph: &Graph,
+    parse_errors: &[String],
+) -> Vec<String> {
     let mut errors: Vec<String> = parse_errors.to_vec();
     for doc in graph.docs.values() {
         for m in &doc.modules {
@@ -983,16 +1034,7 @@ fn cmd_validate(
         }
     }
 
-    if errors.is_empty() {
-        println!("OK ({} docs)", graph.docs.len());
-        Ok(ExitCode::SUCCESS)
-    } else {
-        for e in &errors {
-            eprintln!("- {e}");
-        }
-        eprintln!("\n{} error(s)", errors.len());
-        Ok(ExitCode::from(1))
-    }
+    errors
 }
 
 #[derive(Copy, Clone)]
@@ -1694,6 +1736,314 @@ fn cmd_migrate(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Claude Code hook adapters
+// ---------------------------------------------------------------------------
+
+/// Subset of the Claude Code hook payload the adapters care about.
+#[derive(Deserialize)]
+struct HookPayload {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    stop_hook_active: bool,
+    #[serde(default)]
+    tool_input: Option<HookToolInput>,
+}
+
+#[derive(Deserialize)]
+struct HookToolInput {
+    #[serde(default)]
+    file_path: Option<String>,
+}
+
+fn run_hook(cmd: &HookCmd, root: &Path, doc_root: &Path) -> Result<ExitCode> {
+    match cmd {
+        HookCmd::Postedit { journal_dir } => hook_postedit(root, journal_dir.as_deref()),
+        HookCmd::Stop { journal_dir, note } => {
+            hook_stop(root, doc_root, journal_dir.as_deref(), note.as_deref())
+        }
+    }
+}
+
+/// Hooks are informational: a payload we cannot read or use means
+/// "do nothing", never a user-visible failure.
+fn read_hook_payload() -> Option<HookPayload> {
+    let mut buf = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf).ok()?;
+    serde_json::from_str(&buf).ok()
+}
+
+fn hook_journal_path(journal_dir: Option<&Path>, root: &Path, session_id: &str) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let dir = journal_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_journal_dir);
+    // The root-path hash keys journals per repo so one Claude session that
+    // touches several kusara-managed repos keeps separate journals.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    root.hash(&mut hasher);
+    let session: String = session_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    dir.join(format!("{:016x}-{session}.journal", hasher.finish()))
+}
+
+/// Journals reveal which files a session touched, so keep them out of the
+/// world-writable shared temp dir: prefer a user-private cache directory.
+/// (The Windows temp dir is already per-user.)
+fn default_journal_dir() -> PathBuf {
+    #[cfg(unix)]
+    {
+        if let Some(cache) = std::env::var_os("XDG_CACHE_HOME").filter(|v| !v.is_empty()) {
+            return PathBuf::from(cache).join("kusara").join("hook");
+        }
+        if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+            return PathBuf::from(home)
+                .join(".cache")
+                .join("kusara")
+                .join("hook");
+        }
+    }
+    std::env::temp_dir().join("kusara-hook")
+}
+
+/// Defense in depth for journal privacy: 0700 directories on Unix.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
+        // `create` leaves a pre-existing directory's mode untouched.
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+    }
+    #[cfg(not(unix))]
+    fs::create_dir_all(dir)
+}
+
+/// Defense in depth for journal privacy: 0600 journal files on Unix.
+fn open_private_append(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+fn hook_postedit(root: &Path, journal_dir: Option<&Path>) -> Result<ExitCode> {
+    let Some(payload) = read_hook_payload() else {
+        return Ok(ExitCode::SUCCESS);
+    };
+    let (Some(session_id), Some(file_path)) = (
+        payload.session_id,
+        payload.tool_input.and_then(|t| t.file_path),
+    ) else {
+        return Ok(ExitCode::SUCCESS);
+    };
+    let abs = PathBuf::from(&file_path);
+    let abs = if abs.is_absolute() {
+        abs
+    } else {
+        root.join(abs)
+    };
+    // Edits outside this repository are none of our business. The prefix
+    // check below is lexical, so also reject `..` components: they can
+    // survive strip_prefix yet resolve outside the repo. (Canonicalizing
+    // instead would misreport when the edited file no longer exists.)
+    if abs
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Ok(ExitCode::SUCCESS);
+    }
+    let Ok(rel) = abs.strip_prefix(root) else {
+        return Ok(ExitCode::SUCCESS);
+    };
+    let journal = hook_journal_path(journal_dir, root, &session_id);
+    if let Some(parent) = journal.parent() {
+        let _ = create_private_dir(parent);
+    }
+    let line = format!("{}\n", normalize_separators(&rel.to_string_lossy()));
+    // Best effort: a journal write failure must not surface as a hook error.
+    let _ = open_private_append(&journal)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+    Ok(ExitCode::SUCCESS)
+}
+
+fn hook_stop(
+    root: &Path,
+    doc_root: &Path,
+    journal_dir: Option<&Path>,
+    note: Option<&str>,
+) -> Result<ExitCode> {
+    let Some(payload) = read_hook_payload() else {
+        return Ok(ExitCode::SUCCESS);
+    };
+    let Some(session_id) = payload.session_id else {
+        return Ok(ExitCode::SUCCESS);
+    };
+    let journal = hook_journal_path(journal_dir, root, &session_id);
+    let Ok(raw) = fs::read_to_string(&journal) else {
+        return Ok(ExitCode::SUCCESS); // nothing recorded this turn
+    };
+    let _ = fs::remove_file(&journal); // consume: each edit is reported once
+    let files: BTreeSet<String> = raw
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if files.is_empty() {
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let loaded = Manifest::load(root, doc_root)
+        .and_then(|m| build_graph(root, doc_root, &m, false).map(|g| (m, g)));
+    let (manifest, (graph, parse_errors)) = match loaded {
+        Ok(x) => x,
+        Err(e) => {
+            emit_stop_context(
+                &format!("kusara: cannot check this turn's edits: {e:#}"),
+                note,
+            );
+            return Ok(ExitCode::SUCCESS);
+        }
+    };
+
+    let errors = collect_validate_errors(root, &manifest, &graph, &parse_errors);
+    if !errors.is_empty() {
+        let mut msg = String::from("kusara validate fails after this turn's edits:\n");
+        for e in &errors {
+            msg.push_str(&format!("- {e}\n"));
+        }
+        msg.push_str("\nFix the refs metadata (or adjust the kinds manifest) before finishing.");
+        // `stop_hook_active` means we already interrupted this stop once;
+        // downgrade to non-blocking context to avoid a block loop.
+        if payload.stop_hook_active {
+            emit_stop_context(&msg, note);
+        } else {
+            emit_stop_block(&msg, note);
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if let Some(msg) = hook_stop_advisory(&graph, &files) {
+        emit_stop_context(&msg, note);
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Advisory body for a clean-validate stop: docs of record whose `modules:`
+/// cover the edited sources, plus link fan-out of edited managed docs.
+fn hook_stop_advisory(graph: &Graph, files: &BTreeSet<String>) -> Option<String> {
+    let mut hits: BTreeMap<&DocId, BTreeSet<&str>> = BTreeMap::new();
+    for doc in graph.docs.values() {
+        for m in &doc.modules {
+            let pat = normalize_separators(m);
+            for f in files {
+                if module_covers(&pat, f) {
+                    hits.entry(&doc.id).or_default().insert(f.as_str());
+                }
+            }
+        }
+    }
+    let edited_docs: Vec<&Doc> = graph
+        .docs
+        .values()
+        .filter(|d| files.contains(&normalize_separators(&d.rel_path.to_string_lossy())))
+        .collect();
+    if hits.is_empty() && edited_docs.is_empty() {
+        return None;
+    }
+
+    let mut msg = format!(
+        "kusara end-of-turn check ({} edited file(s)).\n",
+        files.len()
+    );
+    if !hits.is_empty() {
+        msg.push_str("\nDocs of record whose `modules:` cover this turn's source edits:\n");
+        for (id, via) in &hits {
+            let path = graph
+                .docs
+                .get(*id)
+                .map(|d| d.rel_path.display().to_string())
+                .unwrap_or_default();
+            msg.push_str(&format!("  {id}  {path}\n"));
+            msg.push_str(&format!(
+                "    via: {}\n",
+                via.iter().copied().collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
+    if !edited_docs.is_empty() {
+        msg.push_str("\nEdited managed docs -> linked docs to check for content drift:\n");
+        for d in &edited_docs {
+            let mut links: BTreeSet<&DocId> = BTreeSet::new();
+            links.extend(d.depends_on.iter());
+            links.extend(d.related.iter());
+            if let Some(r) = graph.reverse.get(&d.id) {
+                links.extend(r.iter());
+            }
+            if let Some(r) = graph.related_reverse.get(&d.id) {
+                links.extend(r.iter());
+            }
+            links.remove(&d.id);
+            let list = if links.is_empty() {
+                "(none)".to_owned()
+            } else {
+                links
+                    .iter()
+                    .map(|l| l.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            msg.push_str(&format!("  {}  ->  {list}\n", d.id));
+        }
+    }
+    msg.push_str(
+        "\nIf this turn changed observable behaviour, update the docs of record above to match before finishing. Internal-only changes (refactor/bugfix/perf) need no doc update.",
+    );
+    Some(msg)
+}
+
+fn emit_stop_context(text: &str, note: Option<&str>) {
+    let v = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "Stop",
+            "additionalContext": append_note(text, note),
+        }
+    });
+    println!("{v}");
+}
+
+fn emit_stop_block(reason: &str, note: Option<&str>) {
+    let v = serde_json::json!({
+        "decision": "block",
+        "reason": append_note(reason, note),
+    });
+    println!("{v}");
+}
+
+fn append_note(text: &str, note: Option<&str>) -> String {
+    match note {
+        Some(n) => format!("{text}\n\n{n}"),
+        None => text.to_owned(),
+    }
+}
 
 fn print_list<T: std::fmt::Display>(label: &str, xs: &[T]) {
     if xs.is_empty() {
