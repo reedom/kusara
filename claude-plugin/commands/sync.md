@@ -44,7 +44,7 @@ Rationale: don't compound damage on a broken graph.
 
 Run `kusara touched <file1> <file2> ...` with the resolved file list. This returns docs whose `modules:` cover the changed files (closure included by default).
 
-For each Markdown file in the input that is itself a doc tracked by kusara (has a `kusara:` block — or, for not-yet-migrated docs, a legacy `refs:` block), also run `kusara impact <id>` for that doc's id and merge the result into the affected set.
+For each input file that is itself a doc tracked by kusara (Markdown with a `kusara:`/legacy `refs:` block, or HTML/HTM with the same metadata in its embedded `<script type="application/kusara+yaml">` block), also run `kusara impact <id>` for that doc's id and merge the result into the affected set.
 
 Result: a deduplicated set of doc paths + their ids. Call this `AFFECTED`.
 
