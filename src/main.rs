@@ -973,7 +973,7 @@ fn cmd_validate(
                 let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
                 if !in_graph.contains(&rel) {
                     errors.push(format!(
-                        "{}: matches kind `{}` glob `{}` but has no `refs:` block",
+                        "{}: matches kind `{}` glob `{}` but has no kusara front matter (`type:` + `kusara:`, or legacy `refs:`)",
                         rel.display(),
                         kind.name,
                         pat

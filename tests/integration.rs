@@ -190,7 +190,7 @@ fn validate_strict_glob_coverage_html() {
         .arg("validate")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("has no `refs:` block"));
+        .stderr(predicate::str::contains("has no kusara front matter"));
 }
 
 #[test]
@@ -284,7 +284,7 @@ fn validate_strict_glob_coverage() {
         .arg("validate")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("has no `refs:` block"));
+        .stderr(predicate::str::contains("has no kusara front matter"));
 }
 
 #[test]
@@ -707,7 +707,7 @@ fn type_without_kusara_is_skipped() {
     let dir = fixture(MIN_KINDS_MD);
     // Placed directly under docs/ (not under docs/specs/, which is covered by
     // the `spec` kind's `path_globs` and would trip the separate "matches a
-    // kind glob but has no `refs:` block" strict-coverage check in
+    // kind glob but has no kusara front matter" strict-coverage check in
     // `cmd_validate` -- a different, unrelated invariant). This location only
     // exercises `FrontMatter::normalize`'s `(None, None) => Ok(None)` skip path.
     write(dir.path(), "docs/x.md", "---\ntype: spec\n---\n# x\n");
