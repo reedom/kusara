@@ -23,10 +23,10 @@ Decision table for picking between `implements`, `depends_on`, `related`, `provi
 
 ```yaml
 ---
-refs:
+type: reference
+title: "Auth session storage"
+kusara:
   id: ref:auth-session
-  kind: reference
-  title: "Auth session storage"
   implements:
     - fr:01-auth         # this reference doc satisfies FR 01
   depends_on:

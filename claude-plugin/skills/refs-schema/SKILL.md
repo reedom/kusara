@@ -1,52 +1,59 @@
 ---
 name: refs-schema
-description: Authoritative schema for the kusara `refs:` YAML metadata block. Use whenever editing, authoring, validating, or interpreting `refs:` metadata in Markdown or HTML docs scanned by kusara — frontmatter in Markdown, a `<script type="application/kusara+yaml">` data block in HTML — including fields like `id`, `kind`, `implements`, `depends_on`, `related`, `provides`, `modules`, `generated`, `indexes_kind`. Also use when answering questions about kusara cross-reference semantics or relation strength (hard vs soft).
+description: Authoritative schema for the kusara OKF-native frontmatter block. Use whenever editing, authoring, validating, or interpreting kusara metadata in Markdown or HTML docs scanned by kusara — frontmatter in Markdown, a `<script type="application/kusara+yaml">` data block in HTML — including fields like `type`, `title`, `kusara.id`, `kusara.implements`, `kusara.depends_on`, `kusara.related`, `kusara.provides`, `kusara.modules`, `kusara.generated`, `kusara.indexes_kind`. Also use when answering questions about kusara cross-reference semantics, relation strength (hard vs soft), or the legacy `refs:` shape and `kusara migrate`.
 ---
 
-# kusara `refs:` frontmatter schema
+# kusara frontmatter schema
 
-This skill is the single source of truth for the shape and semantics of `refs:` blocks. Use it before editing frontmatter or judging validator errors. The body below is the schema; the `references/` directory carries the verbatim project doc.
+This skill is the single source of truth for the shape and semantics of kusara's OKF-native frontmatter. Use it before editing frontmatter or judging validator errors. The body below is the schema; the `references/` directory carries the verbatim project doc.
 
 ## Shape
 
+kusara frontmatter is a valid OKF (Open Knowledge Format) concept document: OKF's reserved keys sit flat at the top level, and kusara's typed graph lives under a single `kusara:` key.
+
 ```yaml
 ---
-refs:
-  id: <kind>:<scope>[:<sub>]    # required, globally unique
-  kind: <kind>                   # required, must match docs/kinds.md
-  title: "<free text>"           # optional
-  spec: <spec-name>              # optional, parent spec (null for cross-spec)
-  provides:                      # optional, sub-IDs declared in this file
+type: <kind>                     # required, must match docs/kinds.md
+title: "<free text>"              # optional, OKF reserved (shared)
+description: "<free text>"        # optional, OKF reserved
+resource: "<uri>"                 # optional, OKF reserved
+tags: [<tag>, ...]                # optional, OKF reserved
+timestamp: <ISO8601>              # optional, OKF reserved
+kusara:
+  id: <kind>:<scope>[:<sub>]      # required, globally unique
+  spec: <spec-name>               # optional, parent spec (null for cross-spec)
+  provides:                       # optional, sub-IDs declared in this file
     - <id>
-  implements:                    # optional, upstream IDs satisfied
+  implements:                     # optional, upstream IDs satisfied
     - <id>
-  depends_on:                    # optional, hard upstream deps
+  depends_on:                     # optional, hard upstream deps
     - <id>
-  related:                       # optional, weak see-also
+  related:                        # optional, weak see-also
     - <id>
-  modules:                       # optional, source paths or dir prefixes
+  modules:                        # optional, source paths or dir prefixes
     - <path>
-    - <path-prefix>/             # trailing slash = directory prefix
-  generated: false               # set by `kusara index` only
-  indexes_kind: <kind>           # set by `kusara index` only
+    - <path-prefix>/              # trailing slash = directory prefix
+  generated: false                # set by `kusara index` only
+  indexes_kind: <kind>            # set by `kusara index` only
 ---
 ```
 
-All list fields default to empty.
+All list fields default to empty. Unknown top-level keys are tolerated (OKF forward-compatibility); unknown keys inside `kusara:` are rejected.
+
+Legacy `refs:`-wrapped frontmatter is still read (dual-read) but deprecated; see [Legacy `refs:` shape](#legacy-refs-shape) below.
 
 ## HTML documents
 
-kusara also scans `.html` / `.htm` files. HTML has no frontmatter, so the `refs:`
-block lives in an inert data block — a `<script>` element whose `type` is
-`application/kusara+yaml` — carrying the **same** YAML, top-level `refs:` key
-included:
+kusara also scans `.html` / `.htm` files. HTML has no frontmatter, so the
+metadata block lives in an inert data block — a `<script>` element whose `type` is
+`application/kusara+yaml` — carrying the **same** YAML shown above:
 
 ```html
 <head>
 <script type="application/kusara+yaml">
-refs:
+type: spec
+kusara:
   id: spec:auth
-  kind: spec
   implements: [req:auth:1]
 </script>
 </head>
@@ -81,34 +88,38 @@ id := <kind> | <kind>:<scope> | <kind>:<scope>:<sub>
 
 - No trailing slash → exact file (e.g., `src/auth/session.rs`).
 - Trailing slash → directory prefix (e.g., `src/auth/` matches any file under it).
-- A path MAY appear in multiple docs' `modules:` lists.
+- A path MAY appear in multiple docs' `kusara.modules` lists.
 
 ## Provides (sub-IDs)
 
-`provides:` is the only way to declare IDs that have no file of their own (typical for `kind: req`). Any downstream `implements:`/`depends_on:` may reference a provided ID. The validator does not parse the body — `provides:` is the source of truth for which sub-IDs exist.
+`kusara.provides` is the only way to declare IDs that have no file of their own (typical for `type: req`). Any downstream `kusara.implements`/`kusara.depends_on` may reference a provided ID. The validator does not parse the body — `provides:` is the source of truth for which sub-IDs exist.
 
 ## Forbidden hand-edits
 
 Never set these by hand on regular docs. They are written exclusively by `kusara index`:
-- `generated:`
-- `indexes_kind:`
+- `kusara.generated`
+- `kusara.indexes_kind`
 
 ## Authoring checklist
 
-When adding or updating a `refs:` block:
+When adding or updating kusara frontmatter:
 
-1. `id` matches the kind's `id_pattern` and is unique repo-wide.
-2. `kind` is one of the names listed in `docs/kinds.md`.
-3. `implements:` lists the upstream artifacts this doc satisfies (hard).
-4. `depends_on:` lists artifacts this doc would be incorrect without (hard).
-5. `related:` lists weak see-also links (soft).
-6. `modules:` lists source paths this doc is the design of record for.
+1. `kusara.id` matches the kind's `id_pattern` and is unique repo-wide.
+2. `type` is one of the names listed in `docs/kinds.md`.
+3. `kusara.implements` lists the upstream artifacts this doc satisfies (hard).
+4. `kusara.depends_on` lists artifacts this doc would be incorrect without (hard).
+5. `kusara.related` lists weak see-also links (soft).
+6. `kusara.modules` lists source paths this doc is the design of record for.
 7. Run `kusara validate` after the edit.
 
 ## Validator behaviour
 
-- Catches: unknown `kind`, duplicate `id`, dangling `implements`/`depends_on`/`related` (target not in graph), schema errors.
+- Catches: unknown `type`, duplicate `kusara.id`, dangling `implements`/`depends_on`/`related` (target not in graph), schema errors, unknown keys inside `kusara:`, ambiguous docs (both `refs:` and `type:`/`kusara:` present).
 - Does NOT catch: prose drift in "Traceability" sections, incorrect prose narration, body content vs frontmatter mismatch. Humans audit those.
+
+## Legacy `refs:` shape
+
+Before the OKF-native shape, everything lived under one top-level `refs:` key (`refs.kind` → `type`, `refs.title` → top-level `title`, everything else → under `kusara:`). This shape is still read but deprecated: parsing one prints a stderr warning naming the file. Run `kusara migrate` (`--dry-run` to preview which files would change) to rewrite legacy docs in place; it is idempotent and handles both Markdown and the HTML variant. See the "Legacy `refs:` (deprecated)" appendix in `references/refs.md` for the full old shape.
 
 ## When this skill is wrong
 

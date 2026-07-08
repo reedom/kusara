@@ -63,6 +63,12 @@ enum Cmd {
     },
     /// List every known ID (debug aid).
     List,
+    /// Rewrite legacy `refs:` front matter into the OKF-native shape in place.
+    Migrate {
+        /// Print which files would change without writing them.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(clap::ValueEnum, Debug, PartialEq, Eq, Clone, Copy)]
@@ -260,10 +266,68 @@ fn extract_fenced_yaml(content: &str) -> Option<&str> {
 
 #[derive(Debug, Deserialize)]
 struct FrontMatter {
+    // Legacy shape: everything nested under `refs:`.
     #[serde(default)]
     refs: Option<RefsBlock>,
+    // OKF shape: `type` is the bridge field (== kind), `title` shared, plus
+    // OKF reserved keys, plus the kusara graph layer under `kusara:`.
+    #[serde(default, rename = "type")]
+    typ: Option<Kind>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    resource: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
+    #[serde(default)]
+    kusara: Option<KusaraBlock>,
 }
 
+/// The kusara graph layer in the OKF shape. Mirrors `RefsBlock` minus the
+/// hoisted `kind`/`title`. Unknown keys are rejected: this is our namespace.
+///
+/// NOTE: the graph field list is duplicated across three places that must
+/// stay in sync when a field is added/removed: this struct (read), `RefsBlock`
+/// (read, legacy shape), and `KusaraOut` in `emit_okf_frontmatter` (write).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KusaraBlock {
+    id: DocId,
+    #[serde(default)]
+    spec: Option<String>,
+    #[serde(default)]
+    provides: Vec<DocId>,
+    #[serde(default)]
+    implements: Vec<DocId>,
+    #[serde(default)]
+    depends_on: Vec<DocId>,
+    #[serde(default)]
+    related: Vec<DocId>,
+    #[serde(default)]
+    modules: Vec<String>,
+    #[serde(default)]
+    generated: bool,
+    #[serde(default)]
+    indexes_kind: Option<Kind>,
+}
+
+/// OKF reserved keys that have no place in the legacy `refs:` shape. Carried
+/// onto `Doc` and surfaced in `show`/JSON; never validated for content.
+#[derive(Debug, Clone, Default)]
+struct OkfMeta {
+    description: Option<String>,
+    resource: Option<String>,
+    tags: Vec<String>,
+    timestamp: Option<String>,
+}
+
+/// NOTE: mirrors `KusaraBlock`'s graph fields (plus the legacy-only `kind`/
+/// `title`). Keep in sync with `KusaraBlock` (read) and `KusaraOut` in
+/// `emit_okf_frontmatter` (write) when a graph field is added.
 #[derive(Debug, Deserialize)]
 struct RefsBlock {
     id: DocId,
@@ -289,6 +353,61 @@ struct RefsBlock {
     indexes_kind: Option<Kind>,
 }
 
+impl FrontMatter {
+    /// Normalize either shape into `(RefsBlock, OkfMeta, is_legacy)`.
+    /// `Ok(None)` = the file carries no kusara metadata (skip it).
+    /// `Err` = ambiguous shape or a missing required field.
+    ///
+    /// The presence of the `kusara:` block -- not `type:` -- is the trigger
+    /// for "this is an OKF kusara doc". A bare top-level `type:` with no
+    /// `kusara:` block is a non-kusara doc and is silently skipped (per
+    /// product decision); `refs:` plus a stray top-level `type:` is legacy,
+    /// not ambiguous (only `refs:` + `kusara:` together are ambiguous).
+    fn normalize(self) -> Result<Option<(RefsBlock, OkfMeta, bool)>, String> {
+        let FrontMatter {
+            refs,
+            typ,
+            title,
+            description,
+            resource,
+            tags,
+            timestamp,
+            kusara,
+        } = self;
+        match (refs, kusara) {
+            (Some(_), Some(_)) => {
+                Err("ambiguous front matter: both `refs:` and `kusara:` present".into())
+            }
+            (Some(refs), None) => Ok(Some((refs, OkfMeta::default(), true))),
+            (None, Some(k)) => {
+                let kind =
+                    typ.ok_or("OKF front matter has `kusara:` but is missing required `type:`")?;
+                let refs = RefsBlock {
+                    id: k.id,
+                    kind,
+                    title,
+                    spec: k.spec,
+                    provides: k.provides,
+                    implements: k.implements,
+                    depends_on: k.depends_on,
+                    related: k.related,
+                    modules: k.modules,
+                    generated: k.generated,
+                    indexes_kind: k.indexes_kind,
+                };
+                let okf = OkfMeta {
+                    description,
+                    resource,
+                    tags,
+                    timestamp,
+                };
+                Ok(Some((refs, okf, false)))
+            }
+            (None, None) => Ok(None),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Doc {
     id: DocId,
@@ -301,6 +420,11 @@ struct Doc {
     depends_on: Vec<DocId>,
     related: Vec<DocId>,
     modules: Vec<String>,
+    /// OKF reserved metadata, carried through from either shape.
+    description: Option<String>,
+    resource: Option<String>,
+    tags: Vec<String>,
+    timestamp: Option<String>,
 }
 
 /// Classifies a doc as either user-authored or `kusara`-generated.
@@ -385,7 +509,8 @@ fn real_main() -> Result<ExitCode> {
 
 fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
     let manifest = Manifest::load(root, doc_root)?;
-    let (graph, parse_errors) = build_graph(root, doc_root, &manifest)?;
+    let warn_deprecated = !matches!(cli.cmd, Cmd::Migrate { .. });
+    let (graph, parse_errors) = build_graph(root, doc_root, &manifest, warn_deprecated)?;
     if !matches!(cli.cmd, Cmd::Validate) && !parse_errors.is_empty() {
         eprintln!(
             "warning: {} parse error(s); run `kusara validate` for details",
@@ -408,6 +533,7 @@ fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
         Cmd::Touched { files, no_closure } => cmd_touched(root, &graph, files, *no_closure),
         Cmd::Index { target } => cmd_index(root, doc_root, &manifest, &graph, *target),
         Cmd::List => cmd_list(&graph),
+        Cmd::Migrate { dry_run } => cmd_migrate(root, doc_root, &manifest, *dry_run),
     }
 }
 
@@ -422,7 +548,12 @@ enum DocFormat {
     Html,
 }
 
-fn build_graph(root: &Path, doc_root: &Path, manifest: &Manifest) -> Result<(Graph, Vec<String>)> {
+fn build_graph(
+    root: &Path,
+    doc_root: &Path,
+    manifest: &Manifest,
+    warn_deprecated: bool,
+) -> Result<(Graph, Vec<String>)> {
     let mut docs: BTreeMap<DocId, Doc> = BTreeMap::new();
     let mut id_to_doc: HashMap<DocId, DocId> = HashMap::new();
     let mut errors: Vec<String> = Vec::new();
@@ -514,9 +645,20 @@ fn build_graph(root: &Path, doc_root: &Path, manifest: &Manifest) -> Result<(Gra
                     continue;
                 }
             };
-            let Some(refs_block) = fm.refs else {
-                continue;
+            let (refs_block, okf_meta, is_legacy) = match fm.normalize() {
+                Ok(Some(v)) => v,
+                Ok(None) => continue,
+                Err(msg) => {
+                    errors.push(format!("{}: {msg}", rel.display()));
+                    continue;
+                }
             };
+            if is_legacy && warn_deprecated {
+                eprintln!(
+                    "warning: {}: legacy `refs:` front matter is deprecated; run `kusara migrate`",
+                    rel.display()
+                );
+            }
             if !manifest.knows(&refs_block.kind) {
                 errors.push(format!(
                     "{} ({}): unknown kind `{}` (not declared in kinds.md)",
@@ -565,6 +707,10 @@ fn build_graph(root: &Path, doc_root: &Path, manifest: &Manifest) -> Result<(Gra
                 depends_on: refs_block.depends_on,
                 related: refs_block.related,
                 modules: refs_block.modules,
+                description: okf_meta.description,
+                resource: okf_meta.resource,
+                tags: okf_meta.tags,
+                timestamp: okf_meta.timestamp,
             };
             if let Some(prev) = docs.get(&doc.id) {
                 errors.push(format!(
@@ -827,7 +973,7 @@ fn cmd_validate(
                 let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
                 if !in_graph.contains(&rel) {
                     errors.push(format!(
-                        "{}: matches kind `{}` glob `{}` but has no `refs:` block",
+                        "{}: matches kind `{}` glob `{}` but has no kusara front matter (`type:` + `kusara:`, or legacy `refs:`)",
                         rel.display(),
                         kind.name,
                         pat
@@ -942,24 +1088,38 @@ fn cmd_show(graph: &Graph, id: &str) -> Result<ExitCode> {
         .get(doc_id)
         .ok_or_else(|| anyhow!("internal: doc `{doc_id}` missing"))?;
 
-    println!("id:       {}", doc.id);
+    // All labels below pad to the same column (14 chars: enough to fit the
+    // widest label, `indexes_kind:`, plus one space) so values line up.
+    println!("id:           {}", doc.id);
     if doc.id.as_str() != id {
-        println!("queried:  {id}  (provided by {})", doc.id);
+        println!("queried:      {id}  (provided by {})", doc.id);
     }
-    println!("kind:     {}", doc.kind());
+    println!("kind:         {}", doc.kind());
     if doc.generated() {
-        println!("generated: true");
+        println!("generated:    true");
         if let Some(k) = doc.indexes_kind() {
             println!("indexes_kind: {k}");
         }
     }
     if let Some(s) = &doc.spec {
-        println!("spec:     {s}");
+        println!("spec:         {s}");
     }
     if let Some(t) = &doc.title {
-        println!("title:    {t}");
+        println!("title:        {t}");
     }
-    println!("path:     {}", doc.rel_path.display());
+    if let Some(d) = &doc.description {
+        println!("description:  {d}");
+    }
+    if let Some(r) = &doc.resource {
+        println!("resource:     {r}");
+    }
+    if !doc.tags.is_empty() {
+        println!("tags:         {}", doc.tags.join(", "));
+    }
+    if let Some(ts) = &doc.timestamp {
+        println!("timestamp:    {ts}");
+    }
+    println!("path:         {}", doc.rel_path.display());
 
     print_list("provides:", &doc.provides);
     print_list("implements:", &doc.implements);
@@ -1114,7 +1274,9 @@ fn write_map(root: &Path, doc_root: &Path, graph: &Graph) -> Result<ExitCode> {
         by_kind.entry(d.kind()).or_default().push(d);
     }
     let mut map = String::new();
-    map.push_str("---\nrefs:\n  id: index:map\n  kind: index\n  generated: true\n  title: \"Doc Map (all kinds)\"\n---\n\n");
+    map.push_str(
+        "---\ntype: index\ntitle: \"Doc Map (all kinds)\"\nkusara:\n  id: index:map\n  generated: true\n---\n\n",
+    );
     map.push_str("# Doc Map\n\n");
     map.push_str("Generated by `kusara index map`. Do not edit by hand.\n");
     map.push_str("All docs across kinds. For per-kind indexes see the per-kind INDEX files; for AI consumption see [ai/graph.json](ai/graph.json).\n\n");
@@ -1149,7 +1311,9 @@ fn write_map(root: &Path, doc_root: &Path, graph: &Graph) -> Result<ExitCode> {
         }
     }
     let mut mm = String::new();
-    mm.push_str("---\nrefs:\n  id: index:modules\n  kind: index\n  generated: true\n  title: \"Source -> Doc Map\"\n---\n\n");
+    mm.push_str(
+        "---\ntype: index\ntitle: \"Source -> Doc Map\"\nkusara:\n  id: index:modules\n  generated: true\n---\n\n",
+    );
     mm.push_str("# Source -> Doc Map\n\n");
     mm.push_str("Generated by `kusara index map`. Do not edit by hand.\n\n");
     mm.push_str("| Source path | Docs of record |\n|---|---|\n");
@@ -1203,6 +1367,18 @@ struct JsonDoc<'a> {
     depends_on: &'a [DocId],
     related: &'a [DocId],
     modules: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<&'a String>,
+    #[serde(skip_serializing_if = "slice_is_empty")]
+    tags: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timestamp: Option<&'a String>,
+}
+
+fn slice_is_empty<T>(s: &&[T]) -> bool {
+    s.is_empty()
 }
 
 fn build_graph_json(graph: &Graph) -> Result<String> {
@@ -1222,6 +1398,10 @@ fn build_graph_json(graph: &Graph) -> Result<String> {
             depends_on: &d.depends_on,
             related: &d.related,
             modules: &d.modules,
+            description: d.description.as_ref(),
+            resource: d.resource.as_ref(),
+            tags: &d.tags,
+            timestamp: d.timestamp.as_ref(),
         })
         .collect();
     let mut modules: BTreeMap<&String, BTreeSet<&DocId>> = BTreeMap::new();
@@ -1255,12 +1435,13 @@ fn write_per_kind_indexes(root: &Path, manifest: &Manifest, graph: &Graph) -> Re
 
         let title = format!("{} Index", kind.name);
         let mut out = String::new();
-        out.push_str("---\nrefs:\n");
+        out.push_str("---\n");
+        out.push_str("type: index\n");
+        out.push_str(&format!("title: \"{title}\"\n"));
+        out.push_str("kusara:\n");
         out.push_str(&format!("  id: index:{}\n", kind.name));
-        out.push_str("  kind: index\n");
         out.push_str(&format!("  indexes_kind: {}\n", kind.name));
         out.push_str("  generated: true\n");
-        out.push_str(&format!("  title: \"{title}\"\n"));
         out.push_str("---\n\n");
         out.push_str(&format!("# {title}\n\n"));
         out.push_str(&format!(
@@ -1333,6 +1514,179 @@ fn cmd_list(graph: &Graph) -> Result<ExitCode> {
             continue;
         };
         println!("{:<40} {:<14} {}", id, doc.kind(), doc.rel_path.display());
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+// ---------------------------------------------------------------------------
+// Migrate
+// ---------------------------------------------------------------------------
+
+/// Serialize the OKF-shaped front matter body (between the `---` fences) for a
+/// normalized doc. Deterministic field order. Ends with a trailing newline.
+fn emit_okf_frontmatter(rb: &RefsBlock, okf: &OkfMeta) -> String {
+    // NOTE: mirrors the graph fields of `KusaraBlock`/`RefsBlock` (read side).
+    // Keep the three field lists in sync when a graph field is added.
+    #[derive(serde::Serialize)]
+    struct KusaraOut {
+        id: DocId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        spec: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        implements: Vec<DocId>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        depends_on: Vec<DocId>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        related: Vec<DocId>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        provides: Vec<DocId>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        modules: Vec<String>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        generated: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        indexes_kind: Option<Kind>,
+    }
+    #[derive(serde::Serialize)]
+    struct OkfOut {
+        #[serde(rename = "type")]
+        typ: Kind,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        resource: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        tags: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
+        kusara: KusaraOut,
+    }
+    let out = OkfOut {
+        typ: rb.kind.clone(),
+        title: rb.title.clone(),
+        description: okf.description.clone(),
+        resource: okf.resource.clone(),
+        tags: okf.tags.clone(),
+        timestamp: okf.timestamp.clone(),
+        kusara: KusaraOut {
+            id: rb.id.clone(),
+            spec: rb.spec.clone(),
+            implements: rb.implements.clone(),
+            depends_on: rb.depends_on.clone(),
+            related: rb.related.clone(),
+            provides: rb.provides.clone(),
+            modules: rb.modules.clone(),
+            generated: rb.generated,
+            indexes_kind: rb.indexes_kind.clone(),
+        },
+    };
+    serde_yaml_ng::to_string(&out).expect("serialize OKF front matter")
+}
+
+/// Replace `inner` (a subslice of `raw`) with `new_inner`, returning the whole
+/// string. Relies on `inner` being a borrow into `raw`.
+fn splice_subslice(raw: &str, inner: &str, new_inner: &str) -> String {
+    let off = inner.as_ptr() as usize - raw.as_ptr() as usize;
+    let mut out = String::with_capacity(raw.len() - inner.len() + new_inner.len());
+    out.push_str(&raw[..off]);
+    out.push_str(new_inner);
+    out.push_str(&raw[off + inner.len()..]);
+    out
+}
+
+fn cmd_migrate(
+    root: &Path,
+    doc_root: &Path,
+    manifest: &Manifest,
+    dry_run: bool,
+) -> Result<ExitCode> {
+    let mut changed = 0u32;
+    let scan_roots = derive_scan_roots(manifest, doc_root);
+    let mut visited: BTreeSet<PathBuf> = BTreeSet::new();
+    for rel in scan_roots {
+        let scan = root.join(&rel);
+        if fs::metadata(&scan).is_err() {
+            continue;
+        }
+        let walker = WalkDir::new(&scan).into_iter().filter_entry(|e| {
+            !e.file_name()
+                .to_str()
+                .map(|n| SKIP_DIRS.contains(&n))
+                .unwrap_or(false)
+        });
+        for entry in walker.flatten() {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let format = match path.extension().and_then(|s| s.to_str()) {
+                Some("md") => DocFormat::Markdown,
+                Some("html") | Some("htm") => DocFormat::Html,
+                _ => continue,
+            };
+            let Ok(rel_path) = path.strip_prefix(root) else {
+                continue;
+            };
+            if !visited.insert(rel_path.to_path_buf()) {
+                continue;
+            }
+            let raw = match fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let yaml = match format {
+                DocFormat::Markdown => match extract_frontmatter(&raw) {
+                    Some(y) => y,
+                    None => continue,
+                },
+                DocFormat::Html => match extract_html_metadata(&raw) {
+                    HtmlMeta::Found(y) => y,
+                    _ => continue,
+                },
+            };
+            let fm: FrontMatter = match serde_yaml_ng::from_str(yaml) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if fm.refs.is_some() && fm.kusara.is_some() {
+                eprintln!(
+                    "warning: {}: ambiguous front matter (both refs: and kusara:), not migrated",
+                    rel_path.display()
+                );
+                continue;
+            }
+            // Only legacy docs need migration.
+            let Some(refs_block) = fm.refs else {
+                continue;
+            };
+            let okf = OkfMeta::default();
+            let body = emit_okf_frontmatter(&refs_block, &okf);
+            let new_yaml = match format {
+                // Markdown yaml has no surrounding newlines inside the fences;
+                // `body` already ends with `\n`, matching `extract_frontmatter`
+                // (which excludes the trailing `\n` before `---`). Drop
+                // exactly the single trailing newline serde_yaml emits.
+                DocFormat::Markdown => body.strip_suffix('\n').unwrap_or(&body).to_string(),
+                // HTML script content in canonical output is newline-wrapped.
+                DocFormat::Html => format!("\n{}", body),
+            };
+            let new_raw = splice_subslice(&raw, yaml, &new_yaml);
+            if new_raw == raw {
+                continue;
+            }
+            if dry_run {
+                println!("would migrate {}", rel_path.display());
+            } else {
+                fs::write(path, new_raw).with_context(|| format!("write {}", path.display()))?;
+                println!("migrated {}", rel_path.display());
+            }
+            changed += 1;
+        }
+    }
+    if changed == 0 {
+        println!("(nothing to migrate)");
     }
     Ok(ExitCode::SUCCESS)
 }

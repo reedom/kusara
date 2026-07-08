@@ -134,9 +134,11 @@ fn html_spec_shows_metadata() {
         .args(["show", "spec:foo"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("id:       spec:foo"))
-        .stdout(predicate::str::contains("kind:     spec"))
-        .stdout(predicate::str::contains("path:     docs/specs/foo.html"));
+        .stdout(predicate::str::contains("id:           spec:foo"))
+        .stdout(predicate::str::contains("kind:         spec"))
+        .stdout(predicate::str::contains(
+            "path:         docs/specs/foo.html",
+        ));
 }
 
 #[test]
@@ -190,7 +192,7 @@ fn validate_strict_glob_coverage_html() {
         .arg("validate")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("has no `refs:` block"));
+        .stderr(predicate::str::contains("has no kusara front matter"));
 }
 
 #[test]
@@ -284,7 +286,7 @@ fn validate_strict_glob_coverage() {
         .arg("validate")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("has no `refs:` block"));
+        .stderr(predicate::str::contains("has no kusara front matter"));
 }
 
 #[test]
@@ -431,8 +433,8 @@ fn show_prints_doc_metadata() {
         .args(["show", "spec:b"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("id:       spec:b"))
-        .stdout(predicate::str::contains("kind:     spec"));
+        .stdout(predicate::str::contains("id:           spec:b"))
+        .stdout(predicate::str::contains("kind:         spec"));
 }
 
 #[test]
@@ -541,6 +543,26 @@ fn index_then_validate_roundtrips() {
     ks(dir.path()).arg("validate").assert().success();
 }
 
+#[test]
+fn generated_index_uses_okf_shape() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/a.md",
+        "---\ntype: spec\nkusara:\n  id: spec:a\n---\n# a\n",
+    );
+    ks(dir.path()).arg("index").assert().success();
+    let idx = fs::read_to_string(dir.path().join("docs/specs/index.md")).unwrap();
+    assert!(idx.contains("type: index"), "index frontmatter: {idx}");
+    assert!(idx.contains("kusara:"), "index frontmatter: {idx}");
+    assert!(
+        !idx.contains("refs:"),
+        "index must not use legacy shape: {idx}"
+    );
+    // The generated index must itself validate (reader round-trips its output).
+    ks(dir.path()).arg("validate").assert().success();
+}
+
 // ---------------------------------------------------------------------------
 // Env override
 // ---------------------------------------------------------------------------
@@ -574,4 +596,269 @@ fn kusara_doc_root_invalid_unicode_bails() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("KUSARA_DOC_ROOT"));
+}
+
+// ---------------------------------------------------------------------------
+// OKF-shape frontmatter (dual-read)
+// ---------------------------------------------------------------------------
+
+// NOTE: written as a single-line literal (not split across source lines with
+// `\` continuations) because Rust's string continuation strips ALL leading
+// whitespace on the following source line, which would eat the YAML nesting
+// indentation under `kusara:`.
+const OKF_DOC: &str = "---\ntype: spec\ntitle: \"Auth\"\ndescription: \"Authentication design\"\ntags: [auth, security]\nkusara:\n  id: spec:auth\n---\n\n# Auth\n";
+
+#[test]
+fn okf_fields_surface_in_show() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/specs/auth.md", OKF_DOC); // has description + tags
+    ks(dir.path())
+        .args(["show", "spec:auth"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "description:  Authentication design",
+        ))
+        .stdout(predicate::str::contains("tags:         auth, security"));
+}
+
+#[test]
+fn okf_shape_validates() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/specs/auth.md", OKF_DOC);
+    ks(dir.path()).arg("validate").assert().success();
+}
+
+#[test]
+fn okf_shape_resolves_refs_like_legacy() {
+    let dir = fixture(MIN_KINDS_MD);
+    // Legacy upstream, OKF downstream that depends on it: no dangling => success.
+    write(
+        dir.path(),
+        "docs/specs/up.md",
+        "---\nrefs:\n  id: spec:up\n  kind: spec\n---\n# up\n",
+    );
+    write(
+        dir.path(),
+        "docs/specs/down.md",
+        "---\ntype: spec\nkusara:\n  id: spec:down\n  depends_on: [spec:up]\n---\n# down\n",
+    );
+    ks(dir.path()).arg("validate").assert().success();
+    ks(dir.path())
+        .args(["show", "spec:down"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("kind:         spec"))
+        .stdout(predicate::str::contains("depends_on:"));
+}
+
+#[test]
+fn okf_and_legacy_both_present_is_error() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/x.md",
+        "---\ntype: spec\nkusara:\n  id: spec:x\nrefs:\n  id: spec:x\n  kind: spec\n---\n# x\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ambiguous"));
+}
+
+#[test]
+fn okf_unknown_key_in_kusara_rejected() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/x.md",
+        "---\ntype: spec\nkusara:\n  id: spec:x\n  bogus: 1\n---\n# x\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("front matter parse error"));
+}
+
+#[test]
+fn okf_top_level_unknown_key_tolerated() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/x.md",
+        "---\ntype: spec\ncustom_field: hello\nkusara:\n  id: spec:x\n---\n# x\n",
+    );
+    ks(dir.path()).arg("validate").assert().success();
+}
+
+#[test]
+fn okf_missing_id_rejected() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/x.md",
+        "---\ntype: spec\nkusara:\n  implements: [spec:up]\n---\n# x\n",
+    );
+    ks(dir.path()).arg("validate").assert().failure();
+}
+
+#[test]
+fn type_without_kusara_is_skipped() {
+    let dir = fixture(MIN_KINDS_MD);
+    // Placed directly under docs/ (not under docs/specs/, which is covered by
+    // the `spec` kind's `path_globs` and would trip the separate "matches a
+    // kind glob but has no kusara front matter" strict-coverage check in
+    // `cmd_validate` -- a different, unrelated invariant). This location only
+    // exercises `FrontMatter::normalize`'s `(None, None) => Ok(None)` skip path.
+    write(dir.path(), "docs/x.md", "---\ntype: spec\n---\n# x\n");
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("OK (0 docs)"));
+    ks(dir.path())
+        .args(["show", "spec:x"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown id"));
+}
+
+#[test]
+fn kusara_without_type_is_error() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/x.md",
+        "---\nkusara:\n  id: spec:x\n---\n# x\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("type"));
+}
+
+#[test]
+fn okf_fields_in_graph_json() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/specs/auth.md", OKF_DOC); // has description + tags
+    write(
+        dir.path(),
+        "docs/specs/plain.md",
+        "---\ntype: spec\nkusara:\n  id: spec:plain\n---\n# Plain\n",
+    );
+    ks(dir.path()).args(["index", "map"]).assert().success();
+    let json_str = fs::read_to_string(dir.path().join("docs/ai/graph.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).expect("valid json");
+    let docs = json["docs"].as_array().expect("docs array");
+
+    let auth = docs
+        .iter()
+        .find(|d| d["id"] == "spec:auth")
+        .expect("spec:auth present");
+    assert_eq!(auth["description"], "Authentication design");
+    assert_eq!(auth["tags"], serde_json::json!(["auth", "security"]));
+
+    let plain = docs
+        .iter()
+        .find(|d| d["id"] == "spec:plain")
+        .expect("spec:plain present");
+    assert!(
+        plain.get("description").is_none(),
+        "plain doc must omit description: {plain}"
+    );
+    assert!(
+        plain.get("tags").is_none(),
+        "plain doc must omit tags: {plain}"
+    );
+}
+
+#[test]
+fn legacy_refs_emits_deprecation_warning() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/a.md",
+        "---\nrefs:\n  id: spec:a\n  kind: spec\n---\n# a\n",
+    );
+    ks(dir.path())
+        .arg("validate")
+        .assert()
+        .success() // legacy still valid...
+        .stderr(predicate::str::contains("deprecated"))
+        .stderr(predicate::str::contains("kusara migrate"));
+}
+
+// ---------------------------------------------------------------------------
+// Migrate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn migrate_rewrites_legacy_markdown() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/a.md",
+        "---\nrefs:\n  id: spec:a\n  kind: spec\n  title: \"A\"\n  depends_on: [spec:b]\n---\n# body\n",
+    );
+    write(
+        dir.path(),
+        "docs/specs/b.md",
+        "---\nrefs:\n  id: spec:b\n  kind: spec\n---\n# b\n",
+    );
+    ks(dir.path()).arg("migrate").assert().success();
+    let a = fs::read_to_string(dir.path().join("docs/specs/a.md")).unwrap();
+    assert!(a.contains("type: spec"), "{a}");
+    assert!(a.contains("kusara:"), "{a}");
+    assert!(a.contains("id: spec:a"), "{a}");
+    assert!(a.contains("depends_on:"), "{a}");
+    assert!(!a.contains("refs:"), "{a}");
+    assert!(a.contains("# body"), "body preserved: {a}");
+    ks(dir.path()).arg("validate").assert().success();
+}
+
+#[test]
+fn migrate_is_idempotent() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/a.md",
+        "---\nrefs:\n  id: spec:a\n  kind: spec\n---\n# a\n",
+    );
+    ks(dir.path()).arg("migrate").assert().success();
+    let once = fs::read_to_string(dir.path().join("docs/specs/a.md")).unwrap();
+    ks(dir.path()).arg("migrate").assert().success();
+    let twice = fs::read_to_string(dir.path().join("docs/specs/a.md")).unwrap();
+    assert_eq!(once, twice, "second migrate must be a no-op");
+}
+
+#[test]
+fn migrate_dry_run_writes_nothing() {
+    let dir = fixture(MIN_KINDS_MD);
+    let original = "---\nrefs:\n  id: spec:a\n  kind: spec\n---\n# a\n";
+    write(dir.path(), "docs/specs/a.md", original);
+    ks(dir.path())
+        .args(["migrate", "--dry-run"])
+        .assert()
+        .success();
+    let after = fs::read_to_string(dir.path().join("docs/specs/a.md")).unwrap();
+    assert_eq!(after, original, "--dry-run must not modify files");
+}
+
+#[test]
+fn migrate_rewrites_legacy_html() {
+    let dir = fixture(HTML_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/specs/a.html",
+        "<html><head><script type=\"application/kusara+yaml\">\nrefs:\n  id: spec:a\n  kind: spec\n</script></head><body>x</body></html>\n",
+    );
+    ks(dir.path()).arg("migrate").assert().success();
+    let a = fs::read_to_string(dir.path().join("docs/specs/a.html")).unwrap();
+    assert!(a.contains("type: spec"), "{a}");
+    assert!(a.contains("kusara:"), "{a}");
+    assert!(!a.contains("refs:"), "{a}");
+    assert!(a.contains("<body>x</body>"), "html body preserved: {a}");
 }
