@@ -1135,3 +1135,208 @@ fn hook_stop_sessions_are_isolated() {
         .success()
         .stdout(predicate::str::is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Stale
+// ---------------------------------------------------------------------------
+
+fn git_in(root: &Path, args: &[&str], epoch: &str) {
+    let date = format!("@{epoch} +0000");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_AUTHOR_DATE", &date)
+        .env("GIT_COMMITTER_DATE", &date)
+        .env("GIT_AUTHOR_NAME", "test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env_remove("GIT_DIR")
+        .status()
+        .expect("run git");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn git_fixture(kinds_md: &str) -> TempDir {
+    let dir = fixture(kinds_md);
+    git_in(dir.path(), &["init", "-q"], "1000000000");
+    dir
+}
+
+fn git_commit_all(root: &Path, msg: &str, epoch: &str) {
+    git_in(root, &["add", "-A"], epoch);
+    git_in(root, &["commit", "-q", "-m", msg, "--no-verify"], epoch);
+}
+
+const STALE_DOC: &str =
+    "---\nrefs:\n  id: ref:auth\n  kind: ref\n  modules:\n    - src/auth/\n---\n\n# Auth\n";
+
+#[test]
+fn stale_flags_doc_older_than_module() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/ref/auth.md", STALE_DOC);
+    write(dir.path(), "src/auth/session.rs", "// v1\n");
+    git_commit_all(dir.path(), "doc + code", "1000000100");
+    write(dir.path(), "src/auth/session.rs", "// v2\n");
+    git_commit_all(dir.path(), "code only", "1000000200");
+    ks(dir.path()).arg("stale").assert().code(1).stdout(
+        predicate::str::contains("docs/ref/auth.md")
+            .and(predicate::str::contains("ref:auth"))
+            .and(predicate::str::contains("src/auth/"))
+            .and(predicate::str::contains("1 stale doc(s)")),
+    );
+}
+
+#[test]
+fn stale_ok_when_doc_is_newest() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(dir.path(), "src/auth/session.rs", "// v1\n");
+    git_commit_all(dir.path(), "code", "1000000100");
+    write(dir.path(), "docs/ref/auth.md", STALE_DOC);
+    git_commit_all(dir.path(), "doc", "1000000200");
+    ks(dir.path())
+        .arg("stale")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("OK"));
+}
+
+#[test]
+fn stale_same_commit_is_fresh() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/ref/auth.md", STALE_DOC);
+    write(dir.path(), "src/auth/session.rs", "// v1\n");
+    git_commit_all(dir.path(), "doc + code together", "1000000100");
+    ks(dir.path()).arg("stale").assert().success();
+}
+
+#[test]
+fn stale_ignores_docs_without_modules() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/ref/plain.md",
+        "---\nrefs:\n  id: ref:plain\n  kind: ref\n---\n",
+    );
+    git_commit_all(dir.path(), "doc", "1000000100");
+    write(dir.path(), "src/lib.rs", "// newer\n");
+    git_commit_all(dir.path(), "code", "1000000200");
+    ks(dir.path()).arg("stale").assert().success();
+}
+
+#[test]
+fn stale_uncommitted_doc_is_fresh() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(dir.path(), "src/auth/session.rs", "// v1\n");
+    git_commit_all(dir.path(), "code", "1000000100");
+    // Doc exists only in the working tree; it cannot be stale yet.
+    write(dir.path(), "docs/ref/auth.md", STALE_DOC);
+    ks(dir.path()).arg("stale").assert().success();
+}
+
+#[test]
+fn stale_exact_file_module() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/ref/auth.md",
+        "---\nrefs:\n  id: ref:auth\n  kind: ref\n  modules:\n    - src/auth/session.rs\n---\n",
+    );
+    write(dir.path(), "src/auth/session.rs", "// v1\n");
+    git_commit_all(dir.path(), "doc + code", "1000000100");
+    write(dir.path(), "src/auth/session.rs", "// v2\n");
+    git_commit_all(dir.path(), "code only", "1000000200");
+    ks(dir.path())
+        .arg("stale")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("src/auth/session.rs"));
+}
+
+#[test]
+fn stale_outside_git_repo_fails() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/ref/auth.md", STALE_DOC);
+    write(dir.path(), "src/auth/session.rs", "// v1\n");
+    ks(dir.path())
+        .arg("stale")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("git"));
+}
+
+// ---------------------------------------------------------------------------
+// Coverage
+// ---------------------------------------------------------------------------
+
+const COVERAGE_DOC: &str =
+    "---\nrefs:\n  id: ref:auth\n  kind: ref\n  modules:\n    - src/auth/\n---\n";
+
+#[test]
+fn coverage_reports_uncovered_and_summary() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/ref/auth.md", COVERAGE_DOC);
+    write(dir.path(), "src/auth/session.rs", "// covered\n");
+    write(dir.path(), "src/billing/invoice.rs", "// uncovered\n");
+    write(dir.path(), "src/billing/refund.rs", "// uncovered\n");
+    git_commit_all(dir.path(), "all", "1000000100");
+    ks(dir.path())
+        .args(["coverage", "src"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("src/billing/")
+                .and(predicate::str::contains("1/3"))
+                // Fully uncovered dirs roll up: individual files are not listed.
+                .and(predicate::str::contains("invoice.rs").not()),
+        );
+}
+
+#[test]
+fn coverage_mixed_dir_lists_files_individually() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/ref/auth.md",
+        "---\nrefs:\n  id: ref:auth\n  kind: ref\n  modules:\n    - src/auth/session.rs\n---\n",
+    );
+    write(dir.path(), "src/auth/session.rs", "// covered\n");
+    write(dir.path(), "src/auth/token.rs", "// uncovered\n");
+    git_commit_all(dir.path(), "all", "1000000100");
+    ks(dir.path())
+        .args(["coverage", "src"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/auth/token.rs"));
+}
+
+#[test]
+fn coverage_all_covered_prints_summary_only() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/ref/auth.md", COVERAGE_DOC);
+    write(dir.path(), "src/auth/session.rs", "// covered\n");
+    git_commit_all(dir.path(), "all", "1000000100");
+    ks(dir.path())
+        .args(["coverage", "src"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1/1").and(predicate::str::contains("Uncovered").not()));
+}
+
+#[test]
+fn coverage_requires_at_least_one_path() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    ks(dir.path()).arg("coverage").assert().code(2);
+}
+
+#[test]
+fn coverage_outside_git_repo_fails() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(dir.path(), "src/auth/session.rs", "// x\n");
+    ks(dir.path())
+        .args(["coverage", "src"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("git"));
+}
