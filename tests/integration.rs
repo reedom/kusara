@@ -908,6 +908,21 @@ fn hook_postedit_records_relative_path_without_manifest() {
     assert_eq!(journal_contents(&journal), "src/a.rs\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn hook_postedit_journal_dir_and_file_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("journal");
+    let abs = dir.path().join("src/a.rs").display().to_string();
+    run_postedit(dir.path(), &journal, "s1", &abs);
+    let dir_mode = fs::metadata(&journal).unwrap().permissions().mode() & 0o777;
+    assert_eq!(dir_mode, 0o700, "journal dir must be user-private");
+    let entry = fs::read_dir(&journal).unwrap().next().unwrap().unwrap();
+    let file_mode = entry.metadata().unwrap().permissions().mode() & 0o777;
+    assert_eq!(file_mode, 0o600, "journal file must be user-private");
+}
+
 #[test]
 fn hook_postedit_ignores_files_outside_root() {
     let dir = tempfile::tempdir().unwrap();

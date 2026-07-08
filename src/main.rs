@@ -1779,7 +1779,7 @@ fn hook_journal_path(journal_dir: Option<&Path>, root: &Path, session_id: &str) 
     use std::hash::{Hash, Hasher};
     let dir = journal_dir
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::temp_dir().join("kusara-hook"));
+        .unwrap_or_else(default_journal_dir);
     // The root-path hash keys journals per repo so one Claude session that
     // touches several kusara-managed repos keeps separate journals.
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1795,6 +1795,53 @@ fn hook_journal_path(journal_dir: Option<&Path>, root: &Path, session_id: &str) 
         })
         .collect();
     dir.join(format!("{:016x}-{session}.journal", hasher.finish()))
+}
+
+/// Journals reveal which files a session touched, so keep them out of the
+/// world-writable shared temp dir: prefer a user-private cache directory.
+/// (The Windows temp dir is already per-user.)
+fn default_journal_dir() -> PathBuf {
+    #[cfg(unix)]
+    {
+        if let Some(cache) = std::env::var_os("XDG_CACHE_HOME").filter(|v| !v.is_empty()) {
+            return PathBuf::from(cache).join("kusara").join("hook");
+        }
+        if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+            return PathBuf::from(home)
+                .join(".cache")
+                .join("kusara")
+                .join("hook");
+        }
+    }
+    std::env::temp_dir().join("kusara-hook")
+}
+
+/// Defense in depth for journal privacy: 0700 directories on Unix.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
+        // `create` leaves a pre-existing directory's mode untouched.
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+    }
+    #[cfg(not(unix))]
+    fs::create_dir_all(dir)
+}
+
+/// Defense in depth for journal privacy: 0600 journal files on Unix.
+fn open_private_append(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 fn hook_postedit(root: &Path, journal_dir: Option<&Path>) -> Result<ExitCode> {
@@ -1819,14 +1866,11 @@ fn hook_postedit(root: &Path, journal_dir: Option<&Path>) -> Result<ExitCode> {
     };
     let journal = hook_journal_path(journal_dir, root, &session_id);
     if let Some(parent) = journal.parent() {
-        let _ = fs::create_dir_all(parent);
+        let _ = create_private_dir(parent);
     }
     let line = format!("{}\n", normalize_separators(&rel.to_string_lossy()));
     // Best effort: a journal write failure must not surface as a hook error.
-    let _ = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&journal)
+    let _ = open_private_append(&journal)
         .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
     Ok(ExitCode::SUCCESS)
 }
