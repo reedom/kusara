@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Single source file: all Rust changes go in `src/main.rs` (the project is one binary crate; follow its existing hand-written-YAML-emitter and integration-test conventions).
+- Single source file: all Rust *production* changes go in `src/main.rs` (the project is one binary crate; follow its existing hand-written-YAML-emitter and integration-test conventions). Integration tests still live in `tests/integration.rs`, and doc updates in their respective files (see File Structure below).
 - No new dependencies. Current deps only: `anyhow`, `clap`, `glob`, `serde`, `serde_json`, `serde_yaml_ng`, `walkdir`.
 - The bridge field is `type` (== kusara kind slug), validated against `docs/kinds.md`. `title` is the only other shared top-level field.
 - kusara graph fields live under `kusara:`: `id` (required), `implements`, `depends_on`, `related`, `provides`, `modules`, `spec`, `generated`, `indexes_kind`.
