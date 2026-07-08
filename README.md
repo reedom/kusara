@@ -89,7 +89,7 @@ kusara show ref:auth-overview              # one doc + its edges
 kusara impact ref:auth-overview            # who depends on this?
 kusara touched src/auth/session.rs         # which docs cover this file?
 kusara stale                               # docs whose `modules:` code changed after them
-kusara coverage src                        # which code is claimed by a doc's `modules:`?
+kusara coverage src                        # which files under src lack a doc claiming them in `modules:`?
 kusara index map                           # write map.md + ai/graph.json + ai/modules.md
 kusara index                               # write per-kind INDEX files
 kusara migrate                             # rewrite legacy `refs:` docs to the OKF-native shape
