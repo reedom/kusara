@@ -932,6 +932,17 @@ fn hook_postedit_ignores_files_outside_root() {
 }
 
 #[test]
+fn hook_postedit_rejects_parent_dir_traversal() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("journal");
+    // Lexically under root, but resolves outside of it.
+    run_postedit(dir.path(), &journal, "s1", "src/../../outside/a.rs");
+    let abs_escape = format!("{}/src/../../outside/a.rs", dir.path().display());
+    run_postedit(dir.path(), &journal, "s1", &abs_escape);
+    assert_eq!(journal_contents(&journal), "");
+}
+
+#[test]
 fn hook_postedit_tolerates_garbage_and_empty_stdin() {
     let dir = tempfile::tempdir().unwrap();
     for stdin in ["", "not json", r#"{"tool_input":{}}"#] {

@@ -1860,7 +1860,16 @@ fn hook_postedit(root: &Path, journal_dir: Option<&Path>) -> Result<ExitCode> {
     } else {
         root.join(abs)
     };
-    // Edits outside this repository are none of our business.
+    // Edits outside this repository are none of our business. The prefix
+    // check below is lexical, so also reject `..` components: they can
+    // survive strip_prefix yet resolve outside the repo. (Canonicalizing
+    // instead would misreport when the edited file no longer exists.)
+    if abs
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Ok(ExitCode::SUCCESS);
+    }
     let Ok(rel) = abs.strip_prefix(root) else {
         return Ok(ExitCode::SUCCESS);
     };
