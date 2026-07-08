@@ -1265,3 +1265,78 @@ fn stale_outside_git_repo_fails() {
         .code(2)
         .stderr(predicate::str::contains("git"));
 }
+
+// ---------------------------------------------------------------------------
+// Coverage
+// ---------------------------------------------------------------------------
+
+const COVERAGE_DOC: &str =
+    "---\nrefs:\n  id: ref:auth\n  kind: ref\n  modules:\n    - src/auth/\n---\n";
+
+#[test]
+fn coverage_reports_uncovered_and_summary() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/ref/auth.md", COVERAGE_DOC);
+    write(dir.path(), "src/auth/session.rs", "// covered\n");
+    write(dir.path(), "src/billing/invoice.rs", "// uncovered\n");
+    write(dir.path(), "src/billing/refund.rs", "// uncovered\n");
+    git_commit_all(dir.path(), "all", "1000000100");
+    ks(dir.path())
+        .args(["coverage", "src"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("src/billing/")
+                .and(predicate::str::contains("1/3"))
+                // Fully uncovered dirs roll up: individual files are not listed.
+                .and(predicate::str::contains("invoice.rs").not()),
+        );
+}
+
+#[test]
+fn coverage_mixed_dir_lists_files_individually() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(
+        dir.path(),
+        "docs/ref/auth.md",
+        "---\nrefs:\n  id: ref:auth\n  kind: ref\n  modules:\n    - src/auth/session.rs\n---\n",
+    );
+    write(dir.path(), "src/auth/session.rs", "// covered\n");
+    write(dir.path(), "src/auth/token.rs", "// uncovered\n");
+    git_commit_all(dir.path(), "all", "1000000100");
+    ks(dir.path())
+        .args(["coverage", "src"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/auth/token.rs"));
+}
+
+#[test]
+fn coverage_all_covered_prints_summary_only() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    write(dir.path(), "docs/ref/auth.md", COVERAGE_DOC);
+    write(dir.path(), "src/auth/session.rs", "// covered\n");
+    git_commit_all(dir.path(), "all", "1000000100");
+    ks(dir.path())
+        .args(["coverage", "src"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1/1").and(predicate::str::contains("Uncovered").not()));
+}
+
+#[test]
+fn coverage_requires_at_least_one_path() {
+    let dir = git_fixture(MIN_KINDS_MD);
+    ks(dir.path()).arg("coverage").assert().code(2);
+}
+
+#[test]
+fn coverage_outside_git_repo_fails() {
+    let dir = fixture(MIN_KINDS_MD);
+    write(dir.path(), "src/auth/session.rs", "// x\n");
+    ks(dir.path())
+        .args(["coverage", "src"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("git"));
+}

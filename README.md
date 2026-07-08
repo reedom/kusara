@@ -9,6 +9,7 @@ You/AI hand-edit OKF-native YAML frontmatter on Markdown files: OKF's reserved k
 - **Did I break a link?** (`kusara validate` flags dangling refs, duplicate IDs, unknown kinds, missing source paths.)
 - **What docs cover this code file?** (`kusara touched src/auth/session.rs`)
 - **Which docs went stale?** (`kusara stale` lists docs whose `modules:` code has newer commits than the doc.)
+- **Which code has no doc of record?** (`kusara coverage src` rolls up files no `modules:` claims.)
 - **If I change spec X, what else needs updating?** (`kusara impact spec:auth`)
 - **What does doc Y depend on?** (`kusara deps fr:login`)
 - **Give me a per-kind index page.** (`kusara index`)
@@ -88,6 +89,7 @@ kusara show ref:auth-overview              # one doc + its edges
 kusara impact ref:auth-overview            # who depends on this?
 kusara touched src/auth/session.rs         # which docs cover this file?
 kusara stale                               # docs whose `modules:` code changed after them
+kusara coverage src                        # which code is claimed by a doc's `modules:`?
 kusara index map                           # write map.md + ai/graph.json + ai/modules.md
 kusara index                               # write per-kind INDEX files
 kusara migrate                             # rewrite legacy `refs:` docs to the OKF-native shape
@@ -120,6 +122,7 @@ kusara deps   <id> [<id>...] [--depth <N>] [--include-related]
 kusara show   <id>
 kusara touched <file> [<file>...] [--no-closure]
 kusara stale
+kusara coverage <path> [<path>...]
 kusara list
 kusara index map
 kusara index
