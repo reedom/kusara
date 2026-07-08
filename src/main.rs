@@ -61,6 +61,9 @@ enum Cmd {
         #[arg(value_enum, default_value_t = IndexTarget::All)]
         target: IndexTarget,
     },
+    /// List docs whose `modules:` code changed after the doc's last commit
+    /// (git history based; uncommitted docs are treated as fresh).
+    Stale,
     /// List every known ID (debug aid).
     List,
     /// Rewrite legacy `refs:` front matter into the OKF-native shape in place.
@@ -563,6 +566,7 @@ fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
         Cmd::Show { id } => cmd_show(&graph, id),
         Cmd::Touched { files, no_closure } => cmd_touched(root, &graph, files, *no_closure),
         Cmd::Index { target } => cmd_index(root, doc_root, &manifest, &graph, *target),
+        Cmd::Stale => cmd_stale(root, &graph),
         Cmd::List => cmd_list(&graph),
         Cmd::Migrate { dry_run } => cmd_migrate(root, doc_root, &manifest, *dry_run),
         Cmd::Hook { .. } => unreachable!("hook commands dispatch before the graph load"),
@@ -1283,6 +1287,128 @@ fn normalize_separators(s: &str) -> String {
     } else {
         s.to_owned()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stale detection (git history)
+// ---------------------------------------------------------------------------
+
+/// Last commit that touched a path: unix committer time, short hash, `%cs` date.
+struct GitStamp {
+    time: i64,
+    hash: String,
+    date: String,
+}
+
+/// Returns the last commit touching `rel_path` (a file, or a directory whose
+/// history covers everything under it). `Ok(None)` = no commit touches it
+/// (untracked or brand-new). Errors when `root` is not inside a git work tree.
+fn git_last_commit(root: &Path, rel_path: &str) -> Result<Option<GitStamp>> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["log", "-1", "--format=%ct %h %cs", "--"])
+        .arg(rel_path)
+        .output()
+        .context("run git (is git installed?)")?;
+    if !out.status.success() {
+        bail!(
+            "git log failed for `{}`: {}",
+            rel_path,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout.trim();
+    if line.is_empty() {
+        return Ok(None);
+    }
+    let mut parts = line.split_ascii_whitespace();
+    let (Some(time), Some(hash), Some(date)) = (parts.next(), parts.next(), parts.next()) else {
+        bail!("unexpected git log output for `{rel_path}`: {line}");
+    };
+    Ok(Some(GitStamp {
+        time: time
+            .parse()
+            .with_context(|| format!("parse commit time `{time}`"))?,
+        hash: hash.to_owned(),
+        date: date.to_owned(),
+    }))
+}
+
+fn cmd_stale(root: &Path, graph: &Graph) -> Result<ExitCode> {
+    // path (trailing slash stripped) -> last commit; shared across docs.
+    let mut cache: HashMap<String, Option<GitStamp>> = HashMap::new();
+    struct Finding<'a> {
+        doc: &'a Doc,
+        doc_stamp: GitStamp,
+        module: String,
+        module_stamp: GitStamp,
+    }
+    let mut findings: Vec<Finding> = Vec::new();
+    let mut checked = 0usize;
+    for doc in graph.docs.values() {
+        if doc.generated() || doc.modules.is_empty() {
+            continue;
+        }
+        let doc_rel = normalize_separators(&doc.rel_path.to_string_lossy());
+        // An uncommitted doc is being written right now; it cannot be stale.
+        let Some(doc_stamp) = git_last_commit(root, &doc_rel)? else {
+            continue;
+        };
+        checked += 1;
+        let mut newest: Option<(String, GitStamp)> = None;
+        for m in &doc.modules {
+            let key = normalize_separators(m.trim_end_matches('/'));
+            let stamp = match cache.entry(key.clone()) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(git_last_commit(root, &key)?)
+                }
+            };
+            let Some(stamp) = stamp else { continue };
+            if stamp.time <= doc_stamp.time {
+                continue;
+            }
+            if newest.as_ref().is_none_or(|(_, s)| stamp.time > s.time) {
+                newest = Some((
+                    m.clone(),
+                    GitStamp {
+                        time: stamp.time,
+                        hash: stamp.hash.clone(),
+                        date: stamp.date.clone(),
+                    },
+                ));
+            }
+        }
+        if let Some((module, module_stamp)) = newest {
+            findings.push(Finding {
+                doc,
+                doc_stamp,
+                module,
+                module_stamp,
+            });
+        }
+    }
+    if findings.is_empty() {
+        println!("OK ({checked} docs with modules checked)");
+        return Ok(ExitCode::SUCCESS);
+    }
+    println!("Stale docs (code in `modules:` changed after the doc's last commit):");
+    for f in &findings {
+        println!("  {} ({})", f.doc.rel_path.display(), f.doc.id);
+        println!(
+            "    doc last commit:    {} {}",
+            f.doc_stamp.date, f.doc_stamp.hash
+        );
+        println!(
+            "    newer module path:  {} — {} {}",
+            f.module, f.module_stamp.date, f.module_stamp.hash
+        );
+    }
+    println!();
+    println!("{} stale doc(s)", findings.len());
+    Ok(ExitCode::from(1))
 }
 
 fn cmd_index(
