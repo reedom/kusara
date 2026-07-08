@@ -1088,38 +1088,38 @@ fn cmd_show(graph: &Graph, id: &str) -> Result<ExitCode> {
         .get(doc_id)
         .ok_or_else(|| anyhow!("internal: doc `{doc_id}` missing"))?;
 
-    // All labels below pad to the same column (13 chars: enough to fit the
-    // widest label, `description:`, plus one space) so values line up.
-    println!("id:          {}", doc.id);
+    // All labels below pad to the same column (14 chars: enough to fit the
+    // widest label, `indexes_kind:`, plus one space) so values line up.
+    println!("id:           {}", doc.id);
     if doc.id.as_str() != id {
-        println!("queried:     {id}  (provided by {})", doc.id);
+        println!("queried:      {id}  (provided by {})", doc.id);
     }
-    println!("kind:        {}", doc.kind());
+    println!("kind:         {}", doc.kind());
     if doc.generated() {
-        println!("generated: true");
+        println!("generated:    true");
         if let Some(k) = doc.indexes_kind() {
             println!("indexes_kind: {k}");
         }
     }
     if let Some(s) = &doc.spec {
-        println!("spec:        {s}");
+        println!("spec:         {s}");
     }
     if let Some(t) = &doc.title {
-        println!("title:       {t}");
+        println!("title:        {t}");
     }
     if let Some(d) = &doc.description {
-        println!("description: {d}");
+        println!("description:  {d}");
     }
     if let Some(r) = &doc.resource {
-        println!("resource:    {r}");
+        println!("resource:     {r}");
     }
     if !doc.tags.is_empty() {
-        println!("tags:        {}", doc.tags.join(", "));
+        println!("tags:         {}", doc.tags.join(", "));
     }
     if let Some(ts) = &doc.timestamp {
-        println!("timestamp:   {ts}");
+        println!("timestamp:    {ts}");
     }
-    println!("path:        {}", doc.rel_path.display());
+    println!("path:         {}", doc.rel_path.display());
 
     print_list("provides:", &doc.provides);
     print_list("implements:", &doc.implements);

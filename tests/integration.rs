@@ -134,9 +134,11 @@ fn html_spec_shows_metadata() {
         .args(["show", "spec:foo"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("id:          spec:foo"))
-        .stdout(predicate::str::contains("kind:        spec"))
-        .stdout(predicate::str::contains("path:        docs/specs/foo.html"));
+        .stdout(predicate::str::contains("id:           spec:foo"))
+        .stdout(predicate::str::contains("kind:         spec"))
+        .stdout(predicate::str::contains(
+            "path:         docs/specs/foo.html",
+        ));
 }
 
 #[test]
@@ -431,8 +433,8 @@ fn show_prints_doc_metadata() {
         .args(["show", "spec:b"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("id:          spec:b"))
-        .stdout(predicate::str::contains("kind:        spec"));
+        .stdout(predicate::str::contains("id:           spec:b"))
+        .stdout(predicate::str::contains("kind:         spec"));
 }
 
 #[test]
@@ -615,9 +617,9 @@ fn okf_fields_surface_in_show() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "description: Authentication design",
+            "description:  Authentication design",
         ))
-        .stdout(predicate::str::contains("tags:        auth, security"));
+        .stdout(predicate::str::contains("tags:         auth, security"));
 }
 
 #[test]
@@ -646,7 +648,7 @@ fn okf_shape_resolves_refs_like_legacy() {
         .args(["show", "spec:down"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("kind:        spec"))
+        .stdout(predicate::str::contains("kind:         spec"))
         .stdout(predicate::str::contains("depends_on:"));
 }
 
