@@ -63,6 +63,78 @@ review diff, commit
 
 Use `/kusara:check` between rounds for a read-only health pulse.
 
+## Recommended project hooks
+
+For a kusara-managed repo, wire the CLI's hook adapters into the project's
+`.claude/settings.json` so every Claude Code session in that repo keeps the doc
+graph honest without anyone remembering to run `/kusara:sync`:
+
+- `SessionStart` — onboarding guard. If the `kusara` binary or this plugin is
+  missing, the session opens with an instruction to install them instead of
+  failing quietly later.
+- `PostToolUse` (`Edit|Write|MultiEdit`) — `kusara hook postedit` journals each
+  edited file. No graph load, no output; near-zero cost per edit.
+- `Stop` — `kusara hook stop` batch-checks the turn's edits once: validate
+  failures block the stop (downgraded to plain context on the second attempt,
+  so it cannot loop), and otherwise the affected docs of record are injected
+  as non-blocking context. Silent when nothing relevant changed.
+
+Every command is guarded with `command -v kusara`, so teammates who cloned the
+repo but have not installed the CLI see one setup nudge at session start
+instead of an error on every edit.
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "missing=\"\"; grep -q '\"kusara@kusara\"' \"$HOME/.claude/plugins/installed_plugins.json\" 2>/dev/null || missing=\"kusara plugin is not installed. Run \\`/plugin install kusara@kusara\\`\"; command -v kusara >/dev/null 2>&1 || missing=\"$missing${missing:+\\n}kusara CLI is not installed. Run \\`/kusara:setup\\` (provided by the kusara plugin) or \\`cargo install kusara --locked\\` (used to validate and sync the doc graph; see docs/kinds.md)\"; if [ -n \"$missing\" ]; then printf \"%b\\n\" \"$missing\" >&2; exit 2; fi"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v kusara >/dev/null 2>&1 && kusara hook postedit || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v kusara >/dev/null 2>&1 && kusara hook stop --note 'Manifest: docs/kinds.md / schema: kusara:refs-schema skill' || true"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Caveats:
+
+- The plugin-installed check greps Claude Code's internal
+  `~/.claude/plugins/installed_plugins.json`, which is an implementation
+  detail: it can false-negative for developers loading the plugin via
+  `--plugin-dir`, and its location or format may change in future Claude Code
+  releases. Treat that half of the guard as a best-effort nudge; drop it if it
+  misfires for your team.
+- These hooks belong in a kusara-managed project's own settings, not in this
+  plugin. Plugin-bundled hooks would fire in every repo the user opens, and in
+  a repo without `docs/kinds.md` the Stop adapter reports "cannot check this
+  turn's edits" on every turn that edits a file.
+
 ## Layout
 
 ```text
