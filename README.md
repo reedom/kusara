@@ -151,7 +151,9 @@ session pays the check cost once per turn instead of once per edit:
   `--note <TEXT>` appends a repo-specific line (e.g. a pointer to your
   cross-reference rules file) to every emission.
 
-`.claude/settings.json` wiring:
+`.claude/settings.json` wiring. The `command -v kusara` guard keeps the hooks
+silent for teammates who cloned the repo but have not installed the CLI yet —
+without it every edit and every stop surfaces a "command not found" error:
 
 ```json
 {
@@ -159,17 +161,31 @@ session pays the check cost once per turn instead of once per edit:
     "PostToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit",
-        "hooks": [{ "type": "command", "command": "kusara hook postedit" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v kusara >/dev/null 2>&1 && kusara hook postedit || true"
+          }
+        ]
       }
     ],
     "Stop": [
       {
-        "hooks": [{ "type": "command", "command": "kusara hook stop --note 'Rules: .claude/rules/refs.md'" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v kusara >/dev/null 2>&1 && kusara hook stop --note 'Manifest: docs/kinds.md' || true"
+          }
+        ]
       }
     ]
   }
 }
 ```
+
+To also nudge new contributors to install the CLI (and the Claude Code plugin)
+at session start, add the `SessionStart` guard shown in the
+[plugin README](claude-plugin/README.md#recommended-project-hooks).
 
 ## Configuration
 
