@@ -92,7 +92,7 @@ instead of an error on every edit.
         "hooks": [
           {
             "type": "command",
-            "command": "missing=\"\"; command -v kusara >/dev/null 2>&1 || missing=\"kusara CLI is not installed. Run /kusara:setup or \\`cargo install kusara --locked\\` (used to validate and sync the doc graph; see docs/kinds.md)\"; grep -q '\"kusara@kusara\"' \"$HOME/.claude/plugins/installed_plugins.json\" 2>/dev/null || missing=\"$missing${missing:+\\n}kusara plugin is not installed. Run \\`/plugin install kusara@kusara\\`\"; if [ -n \"$missing\" ]; then printf \"%b\\n\" \"$missing\" >&2; exit 2; fi"
+            "command": "missing=\"\"; grep -q '\"kusara@kusara\"' \"$HOME/.claude/plugins/installed_plugins.json\" 2>/dev/null || missing=\"kusara plugin is not installed. Run \\`/plugin install kusara@kusara\\`\"; command -v kusara >/dev/null 2>&1 || missing=\"$missing${missing:+\\n}kusara CLI is not installed. Run \\`/kusara:setup\\` (provided by the kusara plugin) or \\`cargo install kusara --locked\\` (used to validate and sync the doc graph; see docs/kinds.md)\"; if [ -n \"$missing\" ]; then printf \"%b\\n\" \"$missing\" >&2; exit 2; fi"
           }
         ]
       }
