@@ -524,10 +524,6 @@ fn main() -> ExitCode {
 
 fn real_main() -> Result<ExitCode> {
     let cli = Cli::parse();
-    let root = match cli.root.clone() {
-        Some(p) => p,
-        None => std::env::current_dir().context("resolve current working directory")?,
-    };
     let doc_root = match std::env::var("KUSARA_DOC_ROOT") {
         Ok(s) => PathBuf::from(s),
         Err(std::env::VarError::NotPresent) => PathBuf::from(DEFAULT_DOC_ROOT),
@@ -535,7 +531,37 @@ fn real_main() -> Result<ExitCode> {
             bail!("KUSARA_DOC_ROOT is not valid UTF-8");
         }
     };
+    let root = match cli.root.clone() {
+        Some(p) => p,
+        None => {
+            let cwd = std::env::current_dir().context("resolve current working directory")?;
+            discover_root(&cwd, &doc_root)
+        }
+    };
     run(&cli, &root, &doc_root)
+}
+
+/// Walks up from `cwd` to the nearest directory holding `<doc_root>/kinds.md`,
+/// so commands and hooks work from any subdirectory of the repo. Hooks in
+/// particular inherit whatever directory the session last `cd`-ed into; with a
+/// cwd-only root, postedit would discard edits above it and stop could not load
+/// the manifest. The walk is bounded by the enclosing git work tree (`.git`
+/// directory, or file in a linked worktree): a manifest is adopted only when a
+/// `.git` sits at or above it, so outside a repo an ancestor manifest planted
+/// in a shared directory (e.g. `/tmp/docs/kinds.md`) is never picked up, and a
+/// nested repo never adopts an enclosing repo's manifest. Falls back to `cwd`
+/// so the "read kind manifest" error names the expected path.
+fn discover_root(cwd: &Path, doc_root: &Path) -> PathBuf {
+    let mut found: Option<&Path> = None;
+    for dir in cwd.ancestors() {
+        if found.is_none() && dir.join(doc_root).join("kinds.md").is_file() {
+            found = Some(dir);
+        }
+        if dir.join(".git").exists() {
+            return found.unwrap_or(cwd).to_path_buf();
+        }
+    }
+    cwd.to_path_buf()
 }
 
 fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {

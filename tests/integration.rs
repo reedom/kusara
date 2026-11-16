@@ -1340,3 +1340,100 @@ fn coverage_outside_git_repo_fails() {
         .code(2)
         .stderr(predicate::str::contains("git"));
 }
+
+// ---------------------------------------------------------------------------
+// Root discovery (no --root)
+// ---------------------------------------------------------------------------
+
+/// Runs kusara from `cwd` without `--root`, as a hook or a shell would.
+fn ks_in(cwd: &Path) -> Command {
+    let mut cmd = Command::cargo_bin("kusara").expect("bin");
+    cmd.current_dir(cwd).env_remove("KUSARA_DOC_ROOT");
+    cmd
+}
+
+/// Canonical tempdir: the process cwd is resolved physically (macOS
+/// `/var` -> `/private/var`), so paths fed to hooks must match it.
+fn canonical_fixture(kinds_md: &str) -> (TempDir, std::path::PathBuf) {
+    let dir = fixture(kinds_md);
+    let root = fs::canonicalize(dir.path()).unwrap();
+    (dir, root)
+}
+
+/// Canonical fixture marked as a git work tree (root discovery needs one).
+fn canonical_repo_fixture(kinds_md: &str) -> (TempDir, std::path::PathBuf) {
+    let (dir, root) = canonical_fixture(kinds_md);
+    fs::create_dir_all(root.join(".git")).unwrap();
+    (dir, root)
+}
+
+#[test]
+fn validate_from_subdirectory_finds_repo_root() {
+    let (_dir, root) = canonical_repo_fixture(MIN_KINDS_MD);
+    let sub = root.join("app/nested");
+    fs::create_dir_all(&sub).unwrap();
+    ks_in(&sub).arg("validate").assert().success();
+}
+
+#[test]
+fn hooks_from_subdirectory_track_edits_at_repo_root() {
+    let (_dir, root) = canonical_repo_fixture(MIN_KINDS_MD);
+    let sub = root.join("app");
+    fs::create_dir_all(&sub).unwrap();
+    let journal = root.join("journal");
+    write(
+        &root,
+        "docs/specs/auth.md",
+        "---\nrefs:\n  id: spec:auth\n  kind: spec\n---\n",
+    );
+    write(
+        &root,
+        "docs/specs/parent.md",
+        "---\nrefs:\n  id: spec:parent\n  kind: spec\n  depends_on:\n    - spec:auth\n---\n",
+    );
+    let abs = root.join("docs/specs/auth.md").display().to_string();
+    ks_in(&sub)
+        .args(["hook", "postedit", "--journal-dir"])
+        .arg(&journal)
+        .write_stdin(postedit_payload("s1", &abs))
+        .assert()
+        .success();
+    ks_in(&sub)
+        .args(["hook", "stop", "--journal-dir"])
+        .arg(&journal)
+        .write_stdin(stop_payload("s1", false))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("spec:auth"))
+        .stdout(predicate::str::contains("spec:parent"));
+}
+
+#[test]
+fn root_discovery_stops_at_git_boundary() {
+    // An unrelated manifest above a nested repository must not be picked up.
+    let (_dir, outer) = canonical_fixture(MIN_KINDS_MD);
+    let inner = outer.join("vendor/other");
+    fs::create_dir_all(inner.join(".git")).unwrap();
+    let sub = inner.join("src");
+    fs::create_dir_all(&sub).unwrap();
+    ks_in(&sub)
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("read kind manifest"))
+        .stderr(predicate::str::contains("vendor/other/src/docs/kinds.md"));
+}
+
+#[test]
+fn root_discovery_does_not_climb_outside_a_git_repo() {
+    // Outside any work tree an ancestor manifest (e.g. one planted in a shared
+    // /tmp) must not be adopted: cwd stays the root.
+    let (_dir, outer) = canonical_fixture(MIN_KINDS_MD);
+    let sub = outer.join("scratch");
+    fs::create_dir_all(&sub).unwrap();
+    ks_in(&sub)
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("scratch/docs/kinds.md"));
+}
