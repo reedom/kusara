@@ -261,6 +261,25 @@ impl Manifest {
                     k.name
                 );
             }
+            if let Some(index) = &k.index {
+                // `kusara index` writes to root.join(output): an absolute path
+                // or `..` would let a manifest overwrite files outside the repo.
+                let escapes = Path::new(&index.output).components().any(|c| {
+                    !matches!(
+                        c,
+                        std::path::Component::Normal(_) | std::path::Component::CurDir
+                    )
+                });
+                if escapes {
+                    bail!(
+                        "{}: kind `{}` has `index.output` `{}` outside the repo root \
+                         (must be a relative path without `..`)",
+                        path.display(),
+                        k.name,
+                        index.output
+                    );
+                }
+            }
             kinds.insert(k.name.clone(), k);
         }
         Ok(Self { kinds })
@@ -524,10 +543,6 @@ fn main() -> ExitCode {
 
 fn real_main() -> Result<ExitCode> {
     let cli = Cli::parse();
-    let root = match cli.root.clone() {
-        Some(p) => p,
-        None => std::env::current_dir().context("resolve current working directory")?,
-    };
     let doc_root = match std::env::var("KUSARA_DOC_ROOT") {
         Ok(s) => PathBuf::from(s),
         Err(std::env::VarError::NotPresent) => PathBuf::from(DEFAULT_DOC_ROOT),
@@ -535,7 +550,60 @@ fn real_main() -> Result<ExitCode> {
             bail!("KUSARA_DOC_ROOT is not valid UTF-8");
         }
     };
+    let root = match cli.root.clone() {
+        Some(p) => p,
+        None => {
+            let cwd = std::env::current_dir().context("resolve current working directory")?;
+            discover_root(&cwd, &doc_root)
+        }
+    };
     run(&cli, &root, &doc_root)
+}
+
+/// Walks up from `cwd` to the nearest directory holding `<doc_root>/kinds.md`,
+/// so commands and hooks work from any subdirectory of the repo. Hooks in
+/// particular inherit whatever directory the session last `cd`-ed into; with a
+/// cwd-only root, postedit would discard edits above it and stop could not load
+/// the manifest.
+///
+/// The walk is bounded by the work tree top-level as reported by git rather
+/// than by probing for a `.git` entry: git rejects repositories owned by
+/// another user (`safe.directory`), so a `.git` plus manifest planted in a
+/// shared directory such as `/tmp` cannot be adopted, and a nested repo never
+/// reaches an enclosing repo's manifest. Outside a repo (or without git) the
+/// root stays `cwd`, so the "read kind manifest" error names the expected path.
+fn discover_root(cwd: &Path, doc_root: &Path) -> PathBuf {
+    let Some(top) = git_toplevel(cwd) else {
+        return cwd.to_path_buf();
+    };
+    if !cwd.starts_with(&top) {
+        return cwd.to_path_buf();
+    }
+    cwd.ancestors()
+        .take_while(|dir| dir.starts_with(&top))
+        .find(|dir| dir.join(doc_root).join("kinds.md").is_file())
+        .unwrap_or(cwd)
+        .to_path_buf()
+}
+
+/// `git rev-parse --show-toplevel` for `dir`; `None` outside a trusted work tree.
+fn git_toplevel(dir: &Path) -> Option<PathBuf> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let top = String::from_utf8(out.stdout).ok()?;
+    let top = top.trim_end_matches(['\n', '\r']);
+    if top.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(top))
 }
 
 fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
