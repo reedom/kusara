@@ -1348,7 +1348,10 @@ fn coverage_outside_git_repo_fails() {
 /// Runs kusara from `cwd` without `--root`, as a hook or a shell would.
 fn ks_in(cwd: &Path) -> Command {
     let mut cmd = Command::cargo_bin("kusara").expect("bin");
-    cmd.current_dir(cwd).env_remove("KUSARA_DOC_ROOT");
+    cmd.current_dir(cwd)
+        .env_remove("KUSARA_DOC_ROOT")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE");
     cmd
 }
 
@@ -1360,10 +1363,10 @@ fn canonical_fixture(kinds_md: &str) -> (TempDir, std::path::PathBuf) {
     (dir, root)
 }
 
-/// Canonical fixture marked as a git work tree (root discovery needs one).
+/// Canonical fixture that is a real git work tree (root discovery needs one).
 fn canonical_repo_fixture(kinds_md: &str) -> (TempDir, std::path::PathBuf) {
     let (dir, root) = canonical_fixture(kinds_md);
-    fs::create_dir_all(root.join(".git")).unwrap();
+    git_in(&root, &["init", "-q"], "1000000000");
     (dir, root)
 }
 
@@ -1413,7 +1416,8 @@ fn root_discovery_stops_at_git_boundary() {
     // An unrelated manifest above a nested repository must not be picked up.
     let (_dir, outer) = canonical_fixture(MIN_KINDS_MD);
     let inner = outer.join("vendor/other");
-    fs::create_dir_all(inner.join(".git")).unwrap();
+    fs::create_dir_all(&inner).unwrap();
+    git_in(&inner, &["init", "-q"], "1000000000");
     let sub = inner.join("src");
     fs::create_dir_all(&sub).unwrap();
     ks_in(&sub)
@@ -1455,4 +1459,19 @@ fn manifest_rejects_index_output_escaping_root() {
             .failure()
             .stderr(predicate::str::contains("index.output"));
     }
+}
+
+#[test]
+fn root_discovery_ignores_a_planted_fake_git_entry() {
+    // A bare `.git` placeholder is not a repository: git does not recognize
+    // it, so it must not authorize adopting the manifest next to it.
+    let (_dir, outer) = canonical_fixture(MIN_KINDS_MD);
+    fs::create_dir_all(outer.join(".git")).unwrap();
+    let sub = outer.join("scratch");
+    fs::create_dir_all(&sub).unwrap();
+    ks_in(&sub)
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("scratch/docs/kinds.md"));
 }

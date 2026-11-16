@@ -133,7 +133,8 @@ kusara hook stop [--journal-dir <DIR>] [--note <TEXT>]
 
 `--root <DIR>` (global): override the repo root. Default: the nearest
 directory at or above cwd that contains `<KUSARA_DOC_ROOT>/kinds.md`, searched
-only within the enclosing git work tree (falls back to cwd outside a repo).
+only up to the work tree top-level reported by `git rev-parse --show-toplevel`
+(falls back to cwd outside a repo, or when git refuses an untrusted one).
 Commands and hooks therefore work from any subdirectory of the repo.
 
 ## Claude Code hooks

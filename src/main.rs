@@ -564,23 +564,46 @@ fn real_main() -> Result<ExitCode> {
 /// so commands and hooks work from any subdirectory of the repo. Hooks in
 /// particular inherit whatever directory the session last `cd`-ed into; with a
 /// cwd-only root, postedit would discard edits above it and stop could not load
-/// the manifest. The walk is bounded by the enclosing git work tree (`.git`
-/// directory, or file in a linked worktree): a manifest is adopted only when a
-/// `.git` sits at or above it, so outside a repo an ancestor manifest planted
-/// in a shared directory (e.g. `/tmp/docs/kinds.md`) is never picked up, and a
-/// nested repo never adopts an enclosing repo's manifest. Falls back to `cwd`
-/// so the "read kind manifest" error names the expected path.
+/// the manifest.
+///
+/// The walk is bounded by the work tree top-level as reported by git rather
+/// than by probing for a `.git` entry: git rejects repositories owned by
+/// another user (`safe.directory`), so a `.git` plus manifest planted in a
+/// shared directory such as `/tmp` cannot be adopted, and a nested repo never
+/// reaches an enclosing repo's manifest. Outside a repo (or without git) the
+/// root stays `cwd`, so the "read kind manifest" error names the expected path.
 fn discover_root(cwd: &Path, doc_root: &Path) -> PathBuf {
-    let mut found: Option<&Path> = None;
-    for dir in cwd.ancestors() {
-        if found.is_none() && dir.join(doc_root).join("kinds.md").is_file() {
-            found = Some(dir);
-        }
-        if dir.join(".git").exists() {
-            return found.unwrap_or(cwd).to_path_buf();
-        }
+    let Some(top) = git_toplevel(cwd) else {
+        return cwd.to_path_buf();
+    };
+    if !cwd.starts_with(&top) {
+        return cwd.to_path_buf();
     }
-    cwd.to_path_buf()
+    cwd.ancestors()
+        .take_while(|dir| dir.starts_with(&top))
+        .find(|dir| dir.join(doc_root).join("kinds.md").is_file())
+        .unwrap_or(cwd)
+        .to_path_buf()
+}
+
+/// `git rev-parse --show-toplevel` for `dir`; `None` outside a trusted work tree.
+fn git_toplevel(dir: &Path) -> Option<PathBuf> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let top = String::from_utf8(out.stdout).ok()?;
+    let top = top.trim_end_matches(['\n', '\r']);
+    if top.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(top))
 }
 
 fn run(cli: &Cli, root: &Path, doc_root: &Path) -> Result<ExitCode> {
