@@ -1437,3 +1437,22 @@ fn root_discovery_does_not_climb_outside_a_git_repo() {
         .failure()
         .stderr(predicate::str::contains("scratch/docs/kinds.md"));
 }
+
+#[test]
+fn manifest_rejects_index_output_escaping_root() {
+    for output in [
+        "/tmp/kusara-escape.md",
+        "../escape.md",
+        "docs/../../escape.md",
+    ] {
+        let manifest = format!(
+            "```yaml\nkinds:\n  - name: spec\n    path_globs: [\"docs/specs/*.md\"]\n    index:\n      output: \"{output}\"\n```\n"
+        );
+        let dir = fixture(&manifest);
+        ks(dir.path())
+            .arg("validate")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("index.output"));
+    }
+}

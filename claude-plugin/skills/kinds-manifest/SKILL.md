@@ -38,7 +38,7 @@ The YAML block under `## Manifest` is the source of truth.
 - **`declared_via: generated`** — kind is written only by `kusara index`. Reserved: `index`.
 - **`id_pattern`** — informational only. The validator does not enforce it; it enforces uniqueness alone.
 - **`singleton`** — informational. Implies exactly one file of the kind.
-- **`index.output`** — when set, `kusara index` writes a generated INDEX file there. The file carries `type: index`, `kusara: { generated: true, indexes_kind: <name> }`.
+- **`index.output`** — when set, `kusara index` writes a generated INDEX file there. Must be repo-relative without `..`; anything else fails manifest load. The file carries `type: index`, `kusara: { generated: true, indexes_kind: <name> }`.
 - **`index.group_by: spec`** — INDEX body splits into one section per `spec:` value.
 
 ## Reserved kind: `index`

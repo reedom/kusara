@@ -261,6 +261,25 @@ impl Manifest {
                     k.name
                 );
             }
+            if let Some(index) = &k.index {
+                // `kusara index` writes to root.join(output): an absolute path
+                // or `..` would let a manifest overwrite files outside the repo.
+                let escapes = Path::new(&index.output).components().any(|c| {
+                    !matches!(
+                        c,
+                        std::path::Component::Normal(_) | std::path::Component::CurDir
+                    )
+                });
+                if escapes {
+                    bail!(
+                        "{}: kind `{}` has `index.output` `{}` outside the repo root \
+                         (must be a relative path without `..`)",
+                        path.display(),
+                        k.name,
+                        index.output
+                    );
+                }
+            }
             kinds.insert(k.name.clone(), k);
         }
         Ok(Self { kinds })
