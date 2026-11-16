@@ -247,7 +247,7 @@ impl Manifest {
             .with_context(|| format!("read kind manifest at {}", path.display()))?;
         let yaml = extract_fenced_yaml(&raw)
             .ok_or_else(|| anyhow!("{}: no ```yaml ...``` fenced block found", path.display()))?;
-        let parsed: ManifestFile = serde_yaml_ng::from_str(yaml)
+        let parsed: ManifestFile = serde_saphyr::from_str(yaml)
             .with_context(|| format!("parse kind manifest at {}", path.display()))?;
         let mut kinds = BTreeMap::new();
         for k in parsed.kinds {
@@ -746,7 +746,7 @@ fn build_graph(
                     }
                 },
             };
-            let fm: FrontMatter = match serde_yaml_ng::from_str(yaml) {
+            let fm: FrontMatter = match serde_saphyr::from_str(yaml) {
                 Ok(v) => v,
                 Err(e) => {
                     errors.push(format!("{}: front matter parse error: {e}", rel.display()));
@@ -1170,10 +1170,8 @@ fn cmd_traverse(
         if let Some(s) = hard.get(&cur) {
             neighbors.extend(s.iter().cloned());
         }
-        if include_related {
-            if let Some(s) = soft.get(&cur) {
-                neighbors.extend(s.iter().cloned());
-            }
+        if include_related && let Some(s) = soft.get(&cur) {
+            neighbors.extend(s.iter().cloned());
         }
         for n in neighbors {
             if seen.insert(n.clone()) {
@@ -1911,7 +1909,7 @@ fn emit_okf_frontmatter(rb: &RefsBlock, okf: &OkfMeta) -> String {
             indexes_kind: rb.indexes_kind.clone(),
         },
     };
-    serde_yaml_ng::to_string(&out).expect("serialize OKF front matter")
+    serde_saphyr::to_string(&out).expect("serialize OKF front matter")
 }
 
 /// Replace `inner` (a subslice of `raw`) with `new_inner`, returning the whole
@@ -1975,7 +1973,7 @@ fn cmd_migrate(
                     _ => continue,
                 },
             };
-            let fm: FrontMatter = match serde_yaml_ng::from_str(yaml) {
+            let fm: FrontMatter = match serde_saphyr::from_str(yaml) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
@@ -1996,7 +1994,7 @@ fn cmd_migrate(
                 // Markdown yaml has no surrounding newlines inside the fences;
                 // `body` already ends with `\n`, matching `extract_frontmatter`
                 // (which excludes the trailing `\n` before `---`). Drop
-                // exactly the single trailing newline serde_yaml emits.
+                // exactly the single trailing newline the YAML serializer emits.
                 DocFormat::Markdown => body.strip_suffix('\n').unwrap_or(&body).to_string(),
                 // HTML script content in canonical output is newline-wrapped.
                 DocFormat::Html => format!("\n{}", body),
@@ -2343,12 +2341,12 @@ fn print_list<T: std::fmt::Display>(label: &str, xs: &[T]) {
 }
 
 fn print_id_line(graph: &Graph, id: &str, indent: &str) {
-    if let Some(doc_id) = graph.id_to_doc.get(id) {
-        if let Some(doc) = graph.docs.get(doc_id) {
-            let title = doc.title.as_deref().unwrap_or("");
-            println!("{indent}{id:<40} {title}");
-            return;
-        }
+    if let Some(doc_id) = graph.id_to_doc.get(id)
+        && let Some(doc) = graph.docs.get(doc_id)
+    {
+        let title = doc.title.as_deref().unwrap_or("");
+        println!("{indent}{id:<40} {title}");
+        return;
     }
     println!("{indent}{id}");
 }
